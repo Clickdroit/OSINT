@@ -11,6 +11,7 @@ document.addEventListener("DOMContentLoaded", () => {
     initTargets();
     initLeaks();
     initKeywordsAndAlerts();
+    initAICopilot();
 });
 
 // --- TABS CONTROLLER ---
@@ -531,4 +532,137 @@ async function fetchAlerts() {
         console.error("Error loading alerts:", error);
         container.innerHTML = `<div class="text-center text-error pad-20">Erreur de chargement des alertes.</div>`;
     }
+}
+
+// --- CYBER COPILOT AI CHAT CONTROLLER ---
+function initAICopilot() {
+    const sendBtn = document.getElementById("chat-send-btn");
+    const chatInput = document.getElementById("chat-user-input");
+
+    sendBtn.addEventListener("click", () => sendChatMessage());
+    chatInput.addEventListener("keypress", (e) => {
+        if (e.key === "Enter") sendChatMessage();
+    });
+}
+
+async function sendChatMessage(customMessage = null) {
+    const chatInput = document.getElementById("chat-user-input");
+    const container = document.getElementById("chat-messages-container");
+    const suggestionsContainer = document.getElementById("chat-suggestions-container");
+    const suggestionsList = document.getElementById("chat-suggestions-list");
+    const sendBtn = document.getElementById("chat-send-btn");
+
+    const messageText = customMessage || chatInput.value.trim();
+    if (!messageText) return;
+
+    if (!customMessage) {
+        chatInput.value = "";
+    }
+
+    // Append User Message to UI
+    appendChatMessage("user", messageText);
+    scrollChatToBottom();
+
+    // Disable input while generating
+    sendBtn.disabled = true;
+    chatInput.disabled = true;
+
+    // Show AI loading indicator
+    const loadingMessageId = appendChatMessage("ai", "<em>Cyber Copilot est en train d'analyser la menace...</em>");
+    scrollChatToBottom();
+
+    try {
+        // Detect context type automatically to assist suggestion lists
+        let contextType = "general";
+        if (messageText.toLowerCase().includes("leak") || messageText.toLowerCase().includes("fuite") || messageText.toLowerCase().includes("comprom")) {
+            contextType = "leaks";
+        } else if (messageText.toLowerCase().includes("alert") || messageText.toLowerCase().includes("cve") || messageText.toLowerCase().includes("faille")) {
+            contextType = "alerts";
+        }
+
+        const response = await fetch(`${API_BASE}/api/v1/ai/chat`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message: messageText, context_type: contextType })
+        });
+
+        if (!response.ok) throw new Error();
+
+        const data = await response.json();
+
+        // Remove loading message and append actual response
+        removeChatMessage(loadingMessageId);
+        
+        // Render Markdown-like responses (convert backticks to HTML code blocks)
+        const formattedResponse = formatAIResponseText(data.response);
+        appendChatMessage("ai", formattedResponse);
+
+        // Update suggested actions chips
+        if (data.suggested_actions && data.suggested_actions.length > 0) {
+            suggestionsContainer.style.display = "block";
+            suggestionsList.innerHTML = "";
+            data.suggested_actions.forEach(action => {
+                const chip = document.createElement("button");
+                chip.className = "suggestion-chip";
+                chip.innerText = action;
+                chip.addEventListener("click", () => {
+                    sendChatMessage(`Comment mettre en œuvre : "${action}" ?`);
+                });
+                suggestionsList.appendChild(chip);
+            });
+        } else {
+            suggestionsContainer.style.display = "none";
+        }
+
+    } catch (error) {
+        removeChatMessage(loadingMessageId);
+        appendChatMessage("ai", "<span class='text-error'>Erreur: Impossible de joindre le Cyber Copilot. Vérifiez votre connexion.</span>");
+    } finally {
+        sendBtn.disabled = false;
+        chatInput.disabled = false;
+        chatInput.focus();
+        scrollChatToBottom();
+    }
+}
+
+function appendChatMessage(sender, text) {
+    const container = document.getElementById("chat-messages-container");
+    const msgDiv = document.createElement("div");
+    msgDiv.className = `chat-message ${sender}-message`;
+    
+    // Unique ID to allow replacement (loading placeholders)
+    const msgId = "msg-" + Date.now() + Math.random().toString(36).substr(2, 5);
+    msgDiv.id = msgId;
+
+    const label = sender === "user" ? "Vous" : "Cyber Copilot";
+    msgDiv.innerHTML = `<div class="message-content"><strong>${label}</strong> : ${text}</div>`;
+    
+    container.appendChild(msgDiv);
+    return msgId;
+}
+
+function removeChatMessage(id) {
+    const msg = document.getElementById(id);
+    if (msg) msg.remove();
+}
+
+function scrollChatToBottom() {
+    const container = document.getElementById("chat-messages-container");
+    container.scrollTop = container.scrollHeight;
+}
+
+function formatAIResponseText(text) {
+    // Simple formatter replacing markdown triple backticks with HTML pre/code elements
+    let formatted = text;
+    
+    // Replace triple backticks code blocks
+    formatted = formatted.replace(/```([\s\S]*?)```/g, "<pre><code>$1</code></pre>");
+    
+    // Replace single backticks inline code
+    formatted = formatted.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+    
+    // Replace linebreaks with <br>
+    formatted = formatted.replace(/\n/g, "<br>");
+    
+    return formatted;
 }

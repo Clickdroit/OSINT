@@ -71,3 +71,13 @@ class AlertResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# AI Copilot Schemas
+class AIChatRequest(BaseModel):
+    message: str = Field(..., description="Message/question sent to the Cyber Analyst Copilot")
+    context_type: Optional[str] = Field("general", description="Context area: 'general', 'leaks', 'alerts'")
+
+class AIChatResponse(BaseModel):
+    response: str
+    suggested_actions: Optional[List[str]] = None

@@ -47,6 +47,7 @@ services:
       - REDIS_HOST=redis
       - APP_NAME=OSINT & Private Intelligence Hub (Prod)
       - DEBUG=False
+      - GEMINI_API_KEY=$GEMINI_API_KEY
     volumes:
       - ./data:/app/data
     depends_on:

@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     # Application settings
     APP_NAME: str = Field(default="OSINT & Private Intelligence Hub")
     DEBUG: bool = Field(default=True)
+    
+    # Gemini API Configuration
+    GEMINI_API_KEY: str | None = Field(default=None)
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -14,9 +14,14 @@ from backend.models import Target, ScanResult, Leak, Keyword, Alert
 from backend.schemas import (
     TargetCreate, TargetResponse, ScanResultResponse,
     TaskStatusResponse, LeakResponse, KeywordCreate,
-    KeywordResponse, AlertResponse
+    KeywordResponse, AlertResponse, AIChatRequest, AIChatResponse
 )
 from backend.celery_app import celery_app
+import google.generativeai as genai
+
+# Configure Google Gemini
+if settings.GEMINI_API_KEY:
+    genai.configure(api_key=settings.GEMINI_API_KEY)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -220,3 +225,70 @@ def list_alerts(db: Session = Depends(get_db)):
 def trigger_rss_check():
     task = celery_app.send_task("workers.tasks.check_rss_feeds")
     return {"task_id": task.id, "status": "PENDING"}
+
+
+# --- GEMINI AI COPILOT ENDPOINT ---
+
+@app.post("/api/v1/ai/chat", response_model=AIChatResponse)
+def chat_with_copilot(chat_in: AIChatRequest):
+    if not settings.GEMINI_API_KEY:
+        return {
+            "response": "Le Cyber Copilot IA n'est pas activé car la clé `GEMINI_API_KEY` n'a pas été configurée dans votre fichier `.env` sur le Droplet. Veuillez renseigner cette clé puis redémarrer le conteneur.",
+            "suggested_actions": [
+                "Renseigner GEMINI_API_KEY dans le fichier .env",
+                "Redémarrer docker compose via: docker compose up -d --build"
+            ]
+        }
+    
+    try:
+        # Define model with strict threat intelligence guidelines
+        system_instruction = (
+            "Tu es 'Cyber Copilot', un assistant d'analyse en cybersécurité et en renseignement (OSINT) intégré "
+            "dans un hub privé de surveillance. Ton but est d'analyser les menaces et de recommander "
+            "des stratégies de défense concrètes.\n\n"
+            "DIRECTIVES DE RÉPONSE :\n"
+            "1. Reste concentré sur la cybersécurité, les menaces, la remédiation et la protection des cibles.\n"
+            "2. Si l'utilisateur pose une question sur un email ou pseudo compromis, suggère des protocoles de sécurité "
+            "(changement de mot de passe, clé de sécurité U2F, alerte phishing, surveillance active).\n"
+            "3. Si l'utilisateur te soumet une alerte de sécurité (ex. CVE, ransomware), explique la faille en termes "
+            "clairs et propose des mesures de mitigation (pare-feu, désactivation de port, patch de version).\n"
+            "4. Adopte un ton professionnel, pragmatique et technique.\n"
+            "5. Réponds en français de manière structurée et concise."
+        )
+        
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-flash",
+            system_instruction=system_instruction
+        )
+        
+        # Query model
+        response = model.generate_content(chat_in.message)
+        
+        # Supply recommendations based on context_type
+        suggestions = []
+        if chat_in.context_type == "leaks":
+            suggestions = [
+                "Activer l'authentification multifacteur (MFA)",
+                "Changer immédiatement le mot de passe sur tous les services liés",
+                "Vérifier les activités de connexion suspectes"
+            ]
+        elif chat_in.context_type == "alerts":
+            suggestions = [
+                "Rechercher et appliquer le correctif de sécurité officiel",
+                "Restreindre les accès réseau liés au service vulnérable",
+                "Scanner vos systèmes à la recherche de signatures IoC"
+            ]
+        else:
+            suggestions = [
+                "Vérifier la politique de mots de passe",
+                "Sensibiliser les équipes au phishing ciblé"
+            ]
+            
+        return {
+            "response": response.text,
+            "suggested_actions": suggestions
+        }
+        
+    except Exception as e:
+        print(f"[AI Copilot Error] {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erreur de communication avec l'IA: {str(e)}")
