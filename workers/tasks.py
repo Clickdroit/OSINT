@@ -10,6 +10,13 @@ from backend.database import SessionLocal
 from backend.models import Target, ScanResult, Leak, Keyword, Alert
 from workers.site_signatures import SITES
 
+from backend.config import settings
+import google.generativeai as genai
+
+# Configure Google Gemini
+if settings.GEMINI_API_KEY:
+    genai.configure(api_key=settings.GEMINI_API_KEY)
+
 # Headers to mimic a standard browser request
 DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -165,8 +172,8 @@ def parse_leak_line(line: str) -> dict | None:
     }
 
 
-@celery_app.task(name="workers.tasks.ingest_leak_file")
-def ingest_leak_file(file_path: str, source_name: str, leak_date: str = None):
+@celery_app.task(bind=True, name="workers.tasks.ingest_leak_file")
+def ingest_leak_file(self, file_path: str, source_name: str, leak_date: str = None):
     print(f"[Ingest] Starting ingestion of leak file: {file_path} (Source: {source_name})")
     
     if not os.path.exists(file_path):
@@ -197,6 +204,11 @@ def ingest_leak_file(file_path: str, source_name: str, leak_date: str = None):
                     inserted_records += len(batch)
                     batch.clear()
                     print(f"[Ingest] Processed {total_lines} lines... Inserted {inserted_records} leaks.")
+                    self.update_state(state='PROGRESS', meta={
+                        'current_lines': total_lines,
+                        'inserted_records': inserted_records,
+                        'status_text': f"Ingestion en cours : {inserted_records} fuites insérées ({total_lines} lignes lues)."
+                    })
 
             # Insert any leftovers
             if batch:
@@ -279,6 +291,266 @@ def check_rss_feeds():
     except Exception as e:
         db.rollback()
         print(f"[RSS] Error occurred: {str(e)}")
+        return {"status": "ERROR", "reason": str(e)}
+    finally:
+        db.close()
+
+
+# --- TASK 4: DOMAIN SECURITY AUDITOR SCANNER (PASSIVE) ---
+
+def query_dns_doh(domain: str, record_type: str) -> list:
+    url = f"https://cloudflare-dns.com/dns-query?name={domain}&type={record_type}"
+    headers = {"Accept": "application/dns-json"}
+    try:
+        response = httpx.get(url, headers=headers, timeout=5.0)
+        if response.status_code == 200:
+            data = response.json()
+            answers = data.get("Answer", [])
+            return [ans.get("data") for ans in answers if "data" in ans]
+    except Exception as e:
+        print(f"[DNS DoH Error] Failed to query {record_type} for {domain}: {str(e)}")
+    return []
+
+
+def check_http_headers(domain: str) -> dict:
+    results = {
+        "ssl_valid": "NOT_FOUND",
+        "hsts": "NOT_FOUND",
+        "csp": "NOT_FOUND",
+        "x_frame": "NOT_FOUND",
+        "x_content_type": "NOT_FOUND",
+        "referrer_policy": "NOT_FOUND",
+        "headers_found": {}
+    }
+    
+    # Try HTTPS first
+    url = f"https://{domain}"
+    response = None
+    try:
+        response = httpx.get(url, headers=DEFAULT_HEADERS, timeout=5.0, follow_redirects=True)
+        results["ssl_valid"] = "FOUND"
+    except httpx.HTTPError as e:
+        print(f"[HTTP check] HTTPS failed for {domain}, falling back to HTTP. Error: {str(e)}")
+        results["ssl_valid"] = "NOT_FOUND"
+        url = f"http://{domain}"
+        try:
+            response = httpx.get(url, headers=DEFAULT_HEADERS, timeout=5.0, follow_redirects=True)
+        except Exception:
+            results["ssl_valid"] = "ERROR"
+            
+    if response:
+        headers = response.headers
+        results["headers_found"] = {k: v for k, v in headers.items()}
+        
+        # Check security headers
+        if "Strict-Transport-Security" in headers:
+            results["hsts"] = "FOUND"
+        if "Content-Security-Policy" in headers:
+            results["csp"] = "FOUND"
+        if "X-Frame-Options" in headers:
+            results["x_frame"] = "FOUND"
+        if "X-Content-Type-Options" in headers:
+            results["x_content_type"] = "FOUND"
+        if "Referrer-Policy" in headers:
+            results["referrer_policy"] = "FOUND"
+            
+    return results
+
+
+def generate_ai_domain_report(domain: str, dns_txt: list, dns_mx: list, headers_results: dict) -> str:
+    system_instruction = (
+        "Tu es 'Cyber Copilot Domain Auditor', un expert en audit de sécurité web et réseau.\n"
+        "Ton but est d'analyser les configurations de domaine (DNS, en-têtes HTTP de sécurité, SSL) "
+        "d'un site web, d'évaluer les forces et les faiblesses, et de rédiger un rapport clair, didactique "
+        "et synthétique en français au format Markdown."
+    )
+    
+    hsts = "Présent" if headers_results["hsts"] == "FOUND" else "Manquant"
+    csp = "Présent" if headers_results["csp"] == "FOUND" else "Manquant"
+    x_frame = "Présent" if headers_results["x_frame"] == "FOUND" else "Manquant"
+    x_content_type = "Présent" if headers_results["x_content_type"] == "FOUND" else "Manquant"
+    referrer = "Présent" if headers_results["referrer_policy"] == "FOUND" else "Manquant"
+    ssl = "Valide" if headers_results["ssl_valid"] == "FOUND" else "Invalide/Non disponible"
+    
+    prompt = (
+        f"Génère un rapport d'audit de sécurité au format Markdown pour le domaine : {domain}\n\n"
+        f"Voici les données d'analyse récoltées :\n"
+        f"- Connexion HTTPS / Certificat SSL : {ssl}\n"
+        f"- En-tête HSTS (Strict-Transport-Security) : {hsts}\n"
+        f"- En-tête CSP (Content-Security-Policy) : {csp}\n"
+        f"- En-tête X-Frame-Options : {x_frame}\n"
+        f"- En-tête X-Content-Type-Options : {x_content_type}\n"
+        f"- En-tête Referrer-Policy : {referrer}\n\n"
+        f"Configuration DNS :\n"
+        f"- Enregistrements MX : {dns_mx or 'Aucun détecté'}\n"
+        f"- Enregistrements TXT (SPF/DMARC) : {dns_txt or 'Aucun détecté'}\n\n"
+        f"Consignes pour le rapport :\n"
+        f"1. Rédige en français de manière professionnelle et conseille.\n"
+        f"2. Utilise des listes à puces et du gras pour mettre en évidence les risques.\n"
+        f"3. Structure le rapport en 3 sections :\n"
+        f"   - **1. Synthèse de Sécurité** (évaluation globale de l'exposition du domaine)\n"
+        f"   - **2. Analyse des Vulnérabilités** (explication des risques liés aux en-têtes manquants ou aux DNS non configurés)\n"
+        f"   - **3. Recommandations de Correction** (étapes concrètes et exemples de configuration pour sécuriser le domaine)\n"
+        f"Ne mets pas d'introduction inutile, démarre directement avec le rapport Markdown."
+    )
+    
+    response_text = ""
+    
+    # 1. DigitalOcean AI Router
+    if settings.AI_API_KEY:
+        try:
+            url = settings.AI_BASE_URL.rstrip("/")
+            if not url.endswith("/chat/completions"):
+                url += "/chat/completions"
+            
+            response = httpx.post(
+                url,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {settings.AI_API_KEY}"
+                },
+                json={
+                    "model": settings.AI_MODEL_NAME,
+                    "messages": [
+                        {"role": "system", "content": system_instruction},
+                        {"role": "user", "content": prompt}
+                    ]
+                },
+                timeout=45.0
+            )
+            if response.status_code == 200:
+                res_data = response.json()
+                response_text = res_data["choices"][0]["message"]["content"]
+        except Exception as e:
+            print(f"[AI Router Error] Failed to generate domain report: {str(e)}")
+            
+    # 2. Fallback to Gemini SDK
+    if not response_text and settings.GEMINI_API_KEY:
+        try:
+            model = genai.GenerativeModel(
+                model_name="gemini-1.5-flash",
+                system_instruction=system_instruction
+            )
+            response = model.generate_content(prompt)
+            response_text = response.text
+        except Exception as e:
+            print(f"[Gemini AI Error] Failed to generate domain report: {str(e)}")
+            
+    # 3. Static fallback
+    if not response_text:
+        response_text = (
+            f"### Rapport d'Audit de Sécurité - {domain}\n\n"
+            f"**Statut HTTPS/SSL** : {ssl}\n\n"
+            f"**En-têtes HTTP de sécurité** :\n"
+            f"- HSTS : {hsts}\n"
+            f"- CSP : {csp}\n"
+            f"- X-Frame-Options : {x_frame}\n"
+            f"- X-Content-Type-Options : {x_content_type}\n"
+            f"- Referrer-Policy : {referrer}\n\n"
+            f"**Sécurité de Messagerie (DNS)** :\n"
+            f"- MX : {dns_mx or 'Non détecté'}\n"
+            f"- SPF/DMARC (TXT) : {dns_txt or 'Non détecté'}\n\n"
+            f"*(Note : L'analyse détaillée par IA n'est pas disponible car aucun fournisseur d'IA n'est configuré dans le fichier `.env`)*"
+        )
+        
+    return response_text
+
+
+@celery_app.task(name="workers.tasks.scan_domain")
+def scan_domain(target_id: int):
+    print(f"[Domain Scan] Starting scan for target ID: {target_id}")
+    db = SessionLocal()
+    try:
+        # Fetch target details
+        target = db.get(Target, target_id)
+        if not target or target.type != "domain":
+            print(f"[Domain Scan] Target ID {target_id} not found or is not a domain.")
+            return {"status": "FAILED", "reason": "Target not found or invalid type"}
+            
+        domain = target.value.lower().strip()
+        
+        # 1. Query DNS records (MX, TXT)
+        dns_txt = query_dns_doh(domain, "TXT")
+        dns_mx = query_dns_doh(domain, "MX")
+        
+        # 2. Check HTTP headers & SSL
+        headers_results = check_http_headers(domain)
+        
+        # 3. Generate AI security summary
+        report = generate_ai_domain_report(domain, dns_txt, dns_mx, headers_results)
+        
+        # 4. Save results to database
+        db_results = []
+        
+        # SSL Cert Result
+        db_results.append({
+            "target_id": target_id,
+            "platform": "Certificat SSL/TLS",
+            "url": f"https://{domain}",
+            "status": "FOUND" if headers_results["ssl_valid"] == "FOUND" else "ERROR" if headers_results["ssl_valid"] == "ERROR" else "NOT_FOUND",
+            "response_code": 200 if headers_results["ssl_valid"] == "FOUND" else None,
+            "details": "Connexion HTTPS établie avec succès." if headers_results["ssl_valid"] == "FOUND" else "Impossible d'établir une connexion sécurisée HTTPS."
+        })
+        
+        # HSTS Result
+        db_results.append({
+            "target_id": target_id,
+            "platform": "En-tête Strict-Transport-Security (HSTS)",
+            "url": None,
+            "status": "FOUND" if headers_results["hsts"] == "FOUND" else "NOT_FOUND",
+            "response_code": None,
+            "details": "L'en-tête HSTS est présent et force l'utilisation du protocole sécurisé HTTPS." if headers_results["hsts"] == "FOUND" else "L'en-tête HSTS est manquant, exposant le site à des attaques par dégradation de protocole (SSL stripping)."
+        })
+        
+        # CSP Result
+        db_results.append({
+            "target_id": target_id,
+            "platform": "En-tête Content-Security-Policy (CSP)",
+            "url": None,
+            "status": "FOUND" if headers_results["csp"] == "FOUND" else "NOT_FOUND",
+            "response_code": None,
+            "details": "L'en-tête CSP est configuré, limitant l'exécution de scripts non autorisés." if headers_results["csp"] == "FOUND" else "L'en-tête CSP est manquant, ce qui augmente le risque d'attaques Cross-Site Scripting (XSS)."
+        })
+        
+        # X-Frame-Options Result
+        db_results.append({
+            "target_id": target_id,
+            "platform": "En-tête X-Frame-Options",
+            "url": None,
+            "status": "FOUND" if headers_results["x_frame"] == "FOUND" else "NOT_FOUND",
+            "response_code": None,
+            "details": "L'en-tête X-Frame-Options protège le site contre le détournement de clic (Clickjacking)." if headers_results["x_frame"] == "FOUND" else "L'en-tête X-Frame-Options est manquant, rendant l'application vulnérable au Clickjacking."
+        })
+        
+        # DNS Mail Security Result
+        dns_status = "FOUND" if (dns_txt and any("spf" in val.lower() or "dmarc" in val.lower() for val in dns_txt)) else "NOT_FOUND"
+        db_results.append({
+            "target_id": target_id,
+            "platform": "Configuration DNS Mail (SPF/DMARC)",
+            "url": None,
+            "status": dns_status,
+            "response_code": None,
+            "details": f"Enregistrements SPF/DMARC trouvés : {', '.join(dns_txt)[:200]}" if dns_status == "FOUND" else "Aucun enregistrement SPF ou DMARC trouvé dans les champs TXT, facilitant l'usurpation d'identité par email (phishing/spoofing)."
+        })
+        
+        # AI Security Report Result
+        db_results.append({
+            "target_id": target_id,
+            "platform": "Rapport de Sécurité IA",
+            "url": None,
+            "status": "FOUND",
+            "response_code": None,
+            "details": report
+        })
+        
+        db.execute(insert(ScanResult), db_results)
+        db.commit()
+        print(f"[Domain Scan] Completed for {domain}. Saved 6 audit entries.")
+        return {"status": "SUCCESS", "target_id": target_id}
+        
+    except Exception as e:
+        db.rollback()
+        print(f"[Domain Scan] Database/Processing error: {str(e)}")
         return {"status": "ERROR", "reason": str(e)}
     finally:
         db.close()

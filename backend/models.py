@@ -23,6 +23,7 @@ class ScanResult(Base):
     url = Column(String, nullable=True)
     status = Column(String, nullable=False)  # "FOUND", "NOT_FOUND", "ERROR"
     response_code = Column(Integer, nullable=True)
+    details = Column(String, nullable=True)
     checked_at = Column(DateTime(timezone=True), server_default=func.now())
 
     target = relationship("Target", back_populates="scan_results")

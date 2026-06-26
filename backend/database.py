@@ -28,4 +28,8 @@ def init_db():
     # Enable pg_trgm extension for GIN trigram indexes
     with engine.begin() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm;"))
+        try:
+            conn.execute(text("ALTER TABLE scan_results ADD COLUMN IF NOT EXISTS details TEXT;"))
+        except Exception as e:
+            print(f"[DB init] details column check/add skipped: {str(e)}")
     Base.metadata.create_all(bind=engine)

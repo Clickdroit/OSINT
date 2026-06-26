@@ -24,6 +24,7 @@ class ScanResultResponse(BaseModel):
     url: Optional[str] = None
     status: str
     response_code: Optional[int] = None
+    details: Optional[str] = None
     checked_at: datetime
 
     class Config:
@@ -74,9 +75,14 @@ class AlertResponse(BaseModel):
 
 
 # AI Copilot Schemas
+class ChatMessage(BaseModel):
+    role: str = Field(..., description="Role of the sender: 'user' or 'assistant'")
+    content: str = Field(..., description="Text content of the message")
+
 class AIChatRequest(BaseModel):
     message: str = Field(..., description="Message/question sent to the Cyber Analyst Copilot")
     context_type: Optional[str] = Field("general", description="Context area: 'general', 'leaks', 'alerts'")
+    history: Optional[List[ChatMessage]] = Field(default=None, description="Discussion history of the session")
 
 class AIChatResponse(BaseModel):
     response: str

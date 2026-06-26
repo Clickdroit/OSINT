@@ -4,7 +4,10 @@ const API_BASE = "";
 // Global State
 let activeTargetId = null;
 let activeTargetValue = "";
+let activeTargetType = "";
 let scanPollInterval = null;
+let ingestPollInterval = null;
+let chatHistory = [];
 
 document.addEventListener("DOMContentLoaded", () => {
     initTabs();
@@ -97,7 +100,7 @@ async function fetchTargets() {
         tbody.innerHTML = "";
         targets.forEach(t => {
             const tr = document.createElement("tr");
-            tr.style.cursor = t.type === "username" ? "pointer" : "default";
+            tr.style.cursor = t.type === "username" || t.type === "domain" ? "pointer" : "default";
             
             // Format type badge
             const badgeClass = `badge badge-${t.type}`;
@@ -111,16 +114,16 @@ async function fetchTargets() {
                 <td><span class="${badgeClass}">${typeLabel}</span></td>
                 <td>${dateStr}</td>
                 <td>
-                    ${t.type === 'username' ? `<button class="btn btn-primary btn-sm inspect-btn" data-id="${t.id}" data-val="${t.value}">Analyser</button>` : ''}
+                    ${(t.type === 'username' || t.type === 'domain') ? `<button class="btn btn-primary btn-sm inspect-btn" data-id="${t.id}" data-val="${t.value}" data-type="${t.type}">Analyser</button>` : ''}
                     <button class="btn btn-danger btn-sm delete-target-btn" data-id="${t.id}">Supprimer</button>
                 </td>
             `;
 
-            // Click row to inspect username target
-            if (t.type === "username") {
+            // Click row to inspect target
+            if (t.type === "username" || t.type === "domain") {
                 tr.addEventListener("click", (e) => {
                     if (e.target.classList.contains("delete-target-btn")) return;
-                    showScanPanel(t.id, t.value);
+                    showScanPanel(t.id, t.value, t.type);
                 });
             } else {
                 // Delete button bindings for other types
@@ -164,13 +167,19 @@ async function deleteTarget(id) {
     }
 }
 
-function showScanPanel(targetId, targetValue) {
+function showScanPanel(targetId, targetValue, targetType) {
     activeTargetId = targetId;
     activeTargetValue = targetValue;
+    activeTargetType = targetType;
     
     document.getElementById("scan-results-card").style.display = "block";
-    document.getElementById("results-title").innerText = `Analyse d'Alias : ${targetValue}`;
+    
+    const panelTitle = targetType === "domain" ? `Audit de Sécurité Domaine : ${targetValue}` : `Analyse d'Alias : ${targetValue}`;
+    const scanBtnLabel = targetType === "domain" ? `Lancer l'audit de sécurité` : `Lancer la recherche (100+ sites)`;
+    
+    document.getElementById("results-title").innerText = panelTitle;
     document.getElementById("scan-target-name").innerText = `Cible active : ${targetValue}`;
+    document.getElementById("start-scan-btn").innerText = scanBtnLabel;
     
     // Hide details during initialization
     document.getElementById("scan-progress-container").style.display = "none";
@@ -210,34 +219,88 @@ function renderResultsGrid(results) {
     grid.innerHTML = "";
     
     results.forEach(res => {
-        const card = document.createElement("div");
-        const statusClass = res.status.toLowerCase(); // found, notfound, error
-        card.className = `result-card status-${statusClass}`;
-        
-        const isFound = res.status === "FOUND";
-        const statusLabel = res.status === "FOUND" ? "TROUVÉ" : res.status === "NOT_FOUND" ? "ABSENT" : "ERREUR";
+        if (res.platform === "Rapport de Sécurité IA") {
+            const reportCard = document.createElement("div");
+            reportCard.className = "result-card status-found ai-report-full-width";
+            reportCard.style.gridColumn = "1 / -1";
+            reportCard.style.border = "1px solid var(--accent-glow)";
+            reportCard.innerHTML = `
+                <div class="result-info" style="width: 100%;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 10px; margin-bottom: 15px; width: 100%;">
+                        <span class="result-name" style="font-size: 1.1rem; color: var(--accent); font-weight: 700;">${res.platform}</span>
+                        <span class="badge badge-domain">Analyse IA</span>
+                    </div>
+                    <div class="markdown-body" style="font-size: 0.95rem; color: var(--text-secondary); line-height: 1.6; text-align: justify; width: 100%;">
+                        ${formatAIResponseText(res.details)}
+                    </div>
+                </div>
+            `;
+            grid.appendChild(reportCard);
+        } else {
+            const card = document.createElement("div");
+            const statusClass = res.status.toLowerCase(); // found, notfound, error
+            card.className = `result-card status-${statusClass}`;
+            
+            const isFound = res.status === "FOUND";
+            
+            // Custom labels for domain scan vs username mapping
+            let statusLabel = res.status === "FOUND" ? "TROUVÉ" : res.status === "NOT_FOUND" ? "ABSENT" : "ERREUR";
+            if (activeTargetType === "domain") {
+                statusLabel = res.status === "FOUND" ? "SÉCURISÉ" : res.status === "NOT_FOUND" ? "ALERTE" : "ERREUR";
+            }
+            
+            let actionHtml = "";
+            if (isFound && res.url) {
+                actionHtml = `<a href="${res.url}" target="_blank" class="result-link">Accéder &rarr;</a>`;
+            } else if (res.details) {
+                actionHtml = `<span class="text-muted" style="font-size:0.8rem; display:block; margin-top:5px; line-height:1.4;">${res.details}</span>`;
+            } else {
+                actionHtml = `<span class="text-muted" style="font-size:0.75rem;">Non détecté</span>`;
+            }
 
-        card.innerHTML = `
-            <div class="result-info">
-                <span class="result-name">${res.platform}</span>
-                ${isFound ? `<a href="${res.url}" target="_blank" class="result-link">Accéder au profil &rarr;</a>` : `<span class="text-muted" style="font-size:0.75rem;">Non détecté</span>`}
-            </div>
-            <span class="result-status-tag">${statusLabel}</span>
-        `;
-        grid.appendChild(card);
+            card.innerHTML = `
+                <div class="result-info">
+                    <span class="result-name">${res.platform}</span>
+                    ${actionHtml}
+                </div>
+                <span class="result-status-tag">${statusLabel}</span>
+            `;
+            grid.appendChild(card);
+        }
     });
 }
 
 function displayStats(results) {
     document.getElementById("scan-stats").style.display = "grid";
     
-    const found = results.filter(r => r.status === "FOUND").length;
-    const notfound = results.filter(r => r.status === "NOT_FOUND").length;
-    const error = results.filter(r => r.status === "ERROR").length;
+    const labelFound = document.querySelector("#scan-stats .stat-box:nth-child(1) .stat-label");
+    const labelNotFound = document.querySelector("#scan-stats .stat-box:nth-child(2) .stat-label");
     
-    document.getElementById("stat-found").innerText = found;
-    document.getElementById("stat-notfound").innerText = notfound;
-    document.getElementById("stat-error").innerText = error;
+    if (activeTargetType === "domain") {
+        if (labelFound) labelFound.innerText = "Sécurisés / Présents";
+        if (labelNotFound) labelNotFound.innerText = "Alertes / Manquants";
+        
+        // Exclude the AI Report row from raw counts
+        const auditResults = results.filter(r => r.platform !== "Rapport de Sécurité IA");
+        const secFound = auditResults.filter(r => r.status === "FOUND").length;
+        const secNotFound = auditResults.filter(r => r.status === "NOT_FOUND").length;
+        const secError = auditResults.filter(r => r.status === "ERROR").length;
+        
+        document.getElementById("stat-found").innerText = secFound;
+        document.getElementById("stat-notfound").innerText = secNotFound;
+        document.getElementById("stat-error").innerText = secError;
+    } else {
+        if (labelFound) labelFound.innerText = "Profils trouvés";
+        if (labelNotFound) labelNotFound.innerText = "Non trouvés";
+        
+        const found = results.filter(r => r.status === "FOUND").length;
+        const notfound = results.filter(r => r.status === "NOT_FOUND").length;
+        const error = results.filter(r => r.status === "ERROR").length;
+        
+        document.getElementById("stat-found").innerText = found;
+        document.getElementById("stat-notfound").innerText = notfound;
+        document.getElementById("stat-error").innerText = error;
+    }
 }
 
 // --- CELERY SCANS MANAGER (POLLING) ---
@@ -253,7 +316,11 @@ async function triggerScan(targetId) {
     progressText.innerText = "Création de la tâche de scan...";
     
     try {
-        const response = await fetch(`${API_BASE}/api/v1/scans/pseudo?target_id=${targetId}`, { method: "POST" });
+        const scanUrl = activeTargetType === "domain"
+            ? `${API_BASE}/api/v1/scans/domain?target_id=${targetId}`
+            : `${API_BASE}/api/v1/scans/pseudo?target_id=${targetId}`;
+            
+        const response = await fetch(scanUrl, { method: "POST" });
         if (!response.ok) throw new Error();
         
         const task = await response.json();
@@ -287,7 +354,10 @@ async function pollScanStatus(taskId, targetId) {
         const task = await response.json();
         
         if (task.status === "PENDING" || task.status === "STARTED") {
-            progressText.innerText = "Recherche en cours sur 100+ plateformes (5s env)...";
+            const statusTextMsg = activeTargetType === "domain"
+                ? "Audit du certificat SSL, des en-têtes HTTP et DNS en cours..."
+                : "Recherche en cours sur 100+ plateformes (5s env)...";
+            progressText.innerText = statusTextMsg;
             // Mock incremental progress while pending
             let currentWidth = parseFloat(progressFill.style.width) || 0;
             if (currentWidth < 90) {
@@ -341,8 +411,8 @@ function initLeaks() {
             const response = await fetch(url, { method: "POST" });
             if (response.ok) {
                 const task = await response.json();
-                alert(`Ingestion démarrée ! Tâche ID: ${task.task_id}\nVous pouvez suivre les logs du worker.`);
                 ingestForm.reset();
+                startIngestPolling(task.task_id);
             } else {
                 alert("Erreur de lancement de l'ingestion.");
             }
@@ -350,6 +420,55 @@ function initLeaks() {
             console.error("Error starting ingestion:", error);
         }
     });
+}
+
+function startIngestPolling(taskId) {
+    const banner = document.getElementById("ingest-progress-banner");
+    const progressFill = document.getElementById("ingest-progress-fill");
+    const progressText = document.getElementById("ingest-progress-text");
+    const indicator = document.getElementById("ingest-progress-indicator");
+
+    if (!banner) return;
+
+    banner.style.display = "block";
+    progressFill.style.width = "0%";
+    progressText.innerText = "Initialisation de l'ingestion...";
+    indicator.className = "status-indicator loading";
+
+    clearInterval(ingestPollInterval);
+    ingestPollInterval = setInterval(async () => {
+        try {
+            const response = await fetch(`${API_BASE}/api/v1/scans/${taskId}`);
+            if (!response.ok) throw new Error();
+
+            const task = await response.json();
+
+            if (task.status === "PROGRESS") {
+                const info = task.result || {};
+                progressText.innerText = info.status_text || "Lecture en cours...";
+                progressFill.style.width = "50%";
+            } else if (task.status === "SUCCESS") {
+                clearInterval(ingestPollInterval);
+                progressFill.style.width = "100%";
+                indicator.className = "status-indicator online";
+                
+                const info = task.result || {};
+                progressText.innerText = `Ingestion réussie ! ${info.records_inserted || 0} fuites insérées (${info.lines_processed || 0} lignes lues).`;
+                setTimeout(() => {
+                    banner.style.display = "none";
+                }, 10000);
+            } else if (task.status === "PENDING" || task.status === "STARTED") {
+                progressText.innerText = "Tâche d'ingestion en attente d'exécution...";
+            } else {
+                clearInterval(ingestPollInterval);
+                indicator.className = "status-indicator online";
+                progressText.innerText = `Échec de l'ingestion ou traitement terminé (Statut: ${task.status})`;
+                progressFill.style.width = "0%";
+            }
+        } catch (error) {
+            console.error("Ingest poll error:", error);
+        }
+    }, 2000);
 }
 
 async function searchLeaks() {
@@ -564,6 +683,9 @@ async function sendChatMessage(customMessage = null) {
     appendChatMessage("user", messageText);
     scrollChatToBottom();
 
+    // Save user message to history
+    chatHistory.push({ role: "user", content: messageText });
+
     // Disable input while generating
     sendBtn.disabled = true;
     chatInput.disabled = true;
@@ -584,12 +706,19 @@ async function sendChatMessage(customMessage = null) {
         const response = await fetch(`${API_BASE}/api/v1/ai/chat`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ message: messageText, context_type: contextType })
+            body: JSON.stringify({ 
+                message: messageText, 
+                context_type: contextType,
+                history: chatHistory.slice(0, -1) // Exclude the current message since it is sent in 'message'
+            })
         });
 
         if (!response.ok) throw new Error();
 
         const data = await response.json();
+
+        // Save AI response to history
+        chatHistory.push({ role: "assistant", content: data.response });
 
         // Remove loading message and append actual response
         removeChatMessage(loadingMessageId);
@@ -618,6 +747,8 @@ async function sendChatMessage(customMessage = null) {
     } catch (error) {
         removeChatMessage(loadingMessageId);
         appendChatMessage("ai", "<span class='text-error'>Erreur: Impossible de joindre le Cyber Copilot. Vérifiez votre connexion.</span>");
+        // Remove last user message from history on error to allow retry
+        chatHistory.pop();
     } finally {
         sendBtn.disabled = false;
         chatInput.disabled = false;
@@ -673,6 +804,24 @@ function initRemediator() {
     const form = document.getElementById("remediation-form");
     if (!form) return;
 
+    const copyBtn = document.getElementById("remediation-copy-btn");
+    const fixedCodeEl = document.getElementById("remediation-fixed-code");
+
+    if (copyBtn) {
+        copyBtn.addEventListener("click", () => {
+            navigator.clipboard.writeText(fixedCodeEl.innerText);
+            const originalText = copyBtn.innerText;
+            copyBtn.innerText = "Copié !";
+            copyBtn.style.background = "var(--color-success)";
+            copyBtn.style.color = "var(--bg-base)";
+            setTimeout(() => {
+                copyBtn.innerText = originalText;
+                copyBtn.style.background = "";
+                copyBtn.style.color = "";
+            }, 2000);
+        });
+    }
+
     form.addEventListener("submit", async (e) => {
         e.preventDefault();
 
@@ -686,7 +835,6 @@ function initRemediator() {
         const outputDiv = document.getElementById("remediation-output");
 
         const explanationEl = document.getElementById("remediation-explanation");
-        const fixedCodeEl = document.getElementById("remediation-fixed-code");
 
         if (!code) return;
 
@@ -695,6 +843,7 @@ function initRemediator() {
         outputDiv.style.display = "none";
         loadingDiv.style.display = "block";
         submitBtn.disabled = true;
+        if (copyBtn) copyBtn.style.display = "none";
 
         try {
             const response = await fetch(`${API_BASE}/api/v1/ai/remediate`, {
@@ -719,11 +868,16 @@ function initRemediator() {
             // Display results
             explanationEl.innerHTML = formatAIResponseText(data.explanation);
             
-            // Clean up code block representation
+            // Apply Prism class and display code
+            fixedCodeEl.className = `language-${language} fixed-code-block`;
             fixedCodeEl.innerText = data.fixed_code;
+            if (window.Prism) {
+                Prism.highlightElement(fixedCodeEl);
+            }
 
             loadingDiv.style.display = "none";
             outputDiv.style.display = "block";
+            if (copyBtn) copyBtn.style.display = "inline-block";
         } catch (error) {
             console.error("Remediation error:", error);
             loadingDiv.style.display = "none";

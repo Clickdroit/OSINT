@@ -105,6 +105,22 @@ def trigger_pseudo_scan(target_id: int, db: Session = Depends(get_db)):
     task = celery_app.send_task("workers.tasks.scan_username", args=[target_id])
     return {"task_id": task.id, "status": "PENDING"}
 
+@app.post("/api/v1/scans/domain", response_model=TaskStatusResponse, status_code=202)
+def trigger_domain_scan(target_id: int, db: Session = Depends(get_db)):
+    target = db.get(Target, target_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Target not found")
+    if target.type != "domain":
+        raise HTTPException(status_code=400, detail="Target must be of type 'domain' to run domain security scan")
+
+    # Clear previous results for this target to keep it clean
+    db.execute(text("DELETE FROM scan_results WHERE target_id = :tid").bindparams(tid=target_id))
+    db.commit()
+
+    # Trigger async Celery task
+    task = celery_app.send_task("workers.tasks.scan_domain", args=[target_id])
+    return {"task_id": task.id, "status": "PENDING"}
+
 @app.get("/api/v1/scans/{task_id}", response_model=TaskStatusResponse)
 def get_scan_status(task_id: str):
     res = celery_app.AsyncResult(task_id)
@@ -259,6 +275,14 @@ async def chat_with_copilot(chat_in: AIChatRequest):
             if not url.endswith("/chat/completions"):
                 url += "/chat/completions"
 
+            # Construct messages list with history
+            messages = [{"role": "system", "content": system_instruction}]
+            if chat_in.history:
+                for msg in chat_in.history:
+                    role = "user" if msg.role == "user" else "assistant"
+                    messages.append({"role": role, "content": msg.content})
+            messages.append({"role": "user", "content": chat_in.message})
+
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     url,
@@ -268,10 +292,7 @@ async def chat_with_copilot(chat_in: AIChatRequest):
                     },
                     json={
                         "model": settings.AI_MODEL_NAME,
-                        "messages": [
-                            {"role": "system", "content": system_instruction},
-                            {"role": "user", "content": chat_in.message}
-                        ]
+                        "messages": messages
                     },
                     timeout=45.0
                 )
@@ -296,7 +317,14 @@ async def chat_with_copilot(chat_in: AIChatRequest):
                 model_name="gemini-1.5-flash",
                 system_instruction=system_instruction
             )
-            response = model.generate_content(chat_in.message)
+            gemini_history = []
+            if chat_in.history:
+                for msg in chat_in.history:
+                    role = "user" if msg.role == "user" else "model"
+                    gemini_history.append({"role": role, "parts": [msg.content]})
+
+            chat = model.start_chat(history=gemini_history)
+            response = chat.send_message(chat_in.message)
             response_text = response.text
         except Exception as e:
             print(f"[Gemini AI Error] {str(e)}")

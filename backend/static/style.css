@@ -944,4 +944,47 @@ textarea#remediation-code:focus {
     position: relative;
 }
 
+/* Custom CSS for Ingestion Progress & Domain AI report */
+.ai-report-full-width {
+    grid-column: 1 / -1 !important;
+    background: rgba(0, 242, 254, 0.02) !important;
+    border: 1px dashed var(--accent-glow) !important;
+    padding: 1.5rem !important;
+}
+
+.ai-report-full-width .markdown-body h3 {
+    color: var(--accent);
+    margin-top: 1.25rem;
+    margin-bottom: 0.75rem;
+    font-size: 1.1rem;
+    font-weight: 600;
+}
+
+.ai-report-full-width .markdown-body p {
+    margin-bottom: 1rem;
+    color: var(--text-secondary);
+}
+
+.ai-report-full-width .markdown-body ul {
+    margin-left: 1.5rem;
+    margin-bottom: 1rem;
+    color: var(--text-secondary);
+}
+
+.ai-report-full-width .markdown-body li {
+    margin-bottom: 0.5rem;
+}
+
+.badge-domain {
+    background: rgba(0, 242, 254, 0.1);
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    font-size: 0.75rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    text-transform: uppercase;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+}
+
 

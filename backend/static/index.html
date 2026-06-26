@@ -8,6 +8,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <!-- Prism CSS for syntax highlighting -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet" />
 </head>
 <body>
     <div class="cyber-grid"></div>
@@ -168,6 +170,20 @@
                 </div>
             </div>
 
+            <!-- Ingestion Progress Banner -->
+            <div class="card margin-top card-glow" id="ingest-progress-banner" style="display: none;">
+                <div class="card-header-actions">
+                    <h2 style="margin-bottom: 0;">Progression de l'ingestion</h2>
+                    <span class="status-indicator online" id="ingest-progress-indicator"></span>
+                </div>
+                <div class="scan-progress-bar-container" style="display: block; margin-top: 15px;">
+                    <div class="scan-progress-bar">
+                        <div class="scan-progress-bar-fill" id="ingest-progress-fill" style="width: 0%;"></div>
+                    </div>
+                    <span class="scan-progress-text" id="ingest-progress-text">Démarrage de l'ingestion...</span>
+                </div>
+            </div>
+
             <!-- Search Results -->
             <div class="card margin-top">
                 <h2>Comptes compromis identifiés</h2>
@@ -315,6 +331,7 @@
                             <h3>Proposition de code sécurisé</h3>
                             <div class="code-wrapper margin-top">
                                 <pre><code id="remediation-fixed-code" class="fixed-code-block"></code></pre>
+                                <button class="btn btn-secondary btn-sm" id="remediation-copy-btn" style="display: none; margin-top: 10px;">Copier le code</button>
                             </div>
                         </div>
                     </div>
@@ -326,6 +343,15 @@
     <footer class="app-footer">
         <p>OSINT & Private Intelligence Hub &copy; 2026. Construit pour la performance et la sécurité des données.</p>
     </footer>
+
+    <!-- Prism JS for syntax highlighting -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-python.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-javascript.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-php.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-c.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-go.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-sql.min.js"></script>
 
     <script src="/static/app.js"></script>
 </body>
