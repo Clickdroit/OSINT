@@ -8,13 +8,15 @@ from sqlalchemy import select, or_, text, func
 from typing import List, Optional
 import os
 
+import json
 from backend.config import settings
 from backend.database import get_db, init_db
 from backend.models import Target, ScanResult, Leak, Keyword, Alert
 from backend.schemas import (
     TargetCreate, TargetResponse, ScanResultResponse,
     TaskStatusResponse, LeakResponse, KeywordCreate,
-    KeywordResponse, AlertResponse, AIChatRequest, AIChatResponse
+    KeywordResponse, AlertResponse, AIChatRequest, AIChatResponse,
+    RemediationRequest, RemediationResponse
 )
 from backend.celery_app import celery_app
 import google.generativeai as genai
@@ -334,3 +336,115 @@ async def chat_with_copilot(chat_in: AIChatRequest):
         "response": response_text,
         "suggested_actions": suggestions
     }
+
+
+@app.post("/api/v1/ai/remediate", response_model=RemediationResponse)
+async def remediate_code(req: RemediationRequest):
+    system_instruction = (
+        "Tu es 'Cyber Copilot Code Auditor', un expert en revue de code sécurisé et en remédiation de vulnérabilités.\n"
+        "Ton but est d'analyser le code vulnérable fourni par l'utilisateur, d'identifier les faiblesses de sécurité, "
+        "d'expliquer le problème en français de manière didactique et concise, et de fournir le code entièrement corrigé, "
+        "sécurisé et prêt à l'emploi.\n\n"
+        "DIRECTIVES :\n"
+        "1. Explique brièvement la faille identifiée et comment elle peut être exploitée.\n"
+        "2. Fournis le code complet corrigé.\n"
+        "3. Réponds UNIQUEMENT sous la forme d'un objet JSON brut valide avec les clés 'explanation' et 'fixed_code'.\n"
+        "Ne mets aucun texte de présentation ou d'explication en dehors de l'objet JSON."
+    )
+
+    prompt = (
+        f"Analyse le code suivant écrit en {req.language}.\n"
+        f"Description de la vulnérabilité (si disponible) : {req.vulnerability_description or 'Non spécifiée'}\n\n"
+        f"Code à analyser :\n```\n{req.code}\n```\n\n"
+        f"Retourne ta réponse UNIQUEMENT sous la forme d'un objet JSON brut valide avec la structure suivante :\n"
+        f"{{\n"
+        f"  \"explanation\": \"Explication claire de la faille en français, les risques associés et comment le correctif la résout.\",\n"
+        f"  \"fixed_code\": \"Le code source complet corrigé, sécurisé et prêt à être déployé.\"\n"
+        f"}}\n"
+        f"Ne mets pas de balises markdown ```json autour du JSON. Renvoie du texte brut contenant uniquement l'objet JSON."
+    )
+
+    response_text = ""
+
+    # 1. DigitalOcean / OpenAI compatible router
+    if settings.AI_API_KEY:
+        try:
+            import httpx
+            url = settings.AI_BASE_URL.rstrip("/")
+            if not url.endswith("/chat/completions"):
+                url += "/chat/completions"
+
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    url,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {settings.AI_API_KEY}"
+                    },
+                    json={
+                        "model": settings.AI_MODEL_NAME,
+                        "messages": [
+                            {"role": "system", "content": system_instruction},
+                            {"role": "user", "content": prompt}
+                        ]
+                    },
+                    timeout=45.0
+                )
+                
+                if response.status_code != 200:
+                    raise HTTPException(
+                        status_code=response.status_code, 
+                        detail=f"Erreur Routeur DO: {response.text}"
+                    )
+                
+                res_data = response.json()
+                response_text = res_data["choices"][0]["message"]["content"]
+                
+        except Exception as e:
+            print(f"[AI Router Error] {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Erreur de communication avec l'IA DigitalOcean: {str(e)}")
+
+    # 2. Fallback to Gemini if configured
+    elif settings.GEMINI_API_KEY:
+        try:
+            model = genai.GenerativeModel(
+                model_name="gemini-1.5-flash",
+                system_instruction=system_instruction
+            )
+            response = model.generate_content(prompt)
+            response_text = response.text
+        except Exception as e:
+            print(f"[Gemini AI Error] {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Erreur de communication avec Gemini: {str(e)}")
+            
+    # 3. Not configured warning
+    else:
+        raise HTTPException(
+            status_code=501, 
+            detail="Le Cyber Copilot IA n'est pas configuré. Veuillez renseigner GEMINI_API_KEY ou AI_API_KEY dans votre fichier .env."
+        )
+
+    # Parse the response to extract explanation and fixed_code
+    try:
+        # Clean potential markdown wrappers
+        cleaned = response_text.strip()
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        elif cleaned.startswith("```"):
+            cleaned = cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+        
+        parsed = json.loads(cleaned)
+        return {
+            "explanation": parsed.get("explanation", "Aucune explication fournie."),
+            "fixed_code": parsed.get("fixed_code", req.code)
+        }
+    except Exception as e:
+        print(f"[JSON Parsing Error] Failed to parse AI response as JSON: {response_text}. Error: {str(e)}")
+        return {
+            "explanation": f"L'IA a généré une réponse non-structurée :\n\n{response_text}",
+            "fixed_code": req.code
+        }
+

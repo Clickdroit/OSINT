@@ -81,3 +81,15 @@ class AIChatRequest(BaseModel):
 class AIChatResponse(BaseModel):
     response: str
     suggested_actions: Optional[List[str]] = None
+
+
+# AI Remediation Schemas
+class RemediationRequest(BaseModel):
+    code: str = Field(..., description="The vulnerable code snippet to analyze")
+    language: str = Field(..., description="Programming language of the snippet (e.g. python, javascript, php)")
+    vulnerability_description: Optional[str] = Field(None, description="Optional description of the vulnerability")
+
+class RemediationResponse(BaseModel):
+    explanation: str = Field(..., description="Explanation of the vulnerability and how to fix it")
+    fixed_code: str = Field(..., description="The corrected, secure version of the code snippet")
+

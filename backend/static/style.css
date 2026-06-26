@@ -881,3 +881,67 @@ tr:hover td {
     transform: translateY(-1px);
 }
 
+/* Code Remediation Section CSS */
+textarea#remediation-code {
+    width: 100%;
+    background: rgba(10, 14, 23, 0.7);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    outline: none;
+    resize: vertical;
+    transition: all var(--transition-speed) ease;
+}
+
+textarea#remediation-code:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 10px rgba(0, 242, 254, 0.2);
+}
+
+/* Cyber Spinner */
+.cyber-spinner {
+    width: 40px;
+    height: 40px;
+    margin: 20px auto;
+    border: 3px solid rgba(0, 242, 254, 0.1);
+    border-radius: 50%;
+    border-top-color: var(--accent);
+    animation: spin 1s ease-in-out infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.explanation-text {
+    background: rgba(255, 255, 255, 0.02);
+    border-left: 3px solid var(--accent);
+    padding: 1rem;
+    border-radius: 0 8px 8px 0;
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+}
+
+.fixed-code-block {
+    display: block;
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(0, 242, 254, 0.15);
+    padding: 1rem;
+    border-radius: 8px;
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    overflow-x: auto;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+}
+
+.code-wrapper {
+    position: relative;
+}
+
+

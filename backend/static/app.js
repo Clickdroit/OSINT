@@ -12,6 +12,7 @@ document.addEventListener("DOMContentLoaded", () => {
     initLeaks();
     initKeywordsAndAlerts();
     initAICopilot();
+    initRemediator();
 });
 
 // --- TABS CONTROLLER ---
@@ -666,3 +667,71 @@ function formatAIResponseText(text) {
     
     return formatted;
 }
+
+// --- CODE REMEDIATION CONTROLLER ---
+function initRemediator() {
+    const form = document.getElementById("remediation-form");
+    if (!form) return;
+
+    form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+
+        const language = document.getElementById("remediation-lang").value;
+        const vulnerability_description = document.getElementById("remediation-desc").value.trim();
+        const code = document.getElementById("remediation-code").value.trim();
+        const submitBtn = document.getElementById("remediation-submit-btn");
+
+        const waitingDiv = document.getElementById("remediation-waiting");
+        const loadingDiv = document.getElementById("remediation-loading");
+        const outputDiv = document.getElementById("remediation-output");
+
+        const explanationEl = document.getElementById("remediation-explanation");
+        const fixedCodeEl = document.getElementById("remediation-fixed-code");
+
+        if (!code) return;
+
+        // UI transitions
+        waitingDiv.style.display = "none";
+        outputDiv.style.display = "none";
+        loadingDiv.style.display = "block";
+        submitBtn.disabled = true;
+
+        try {
+            const response = await fetch(`${API_BASE}/api/v1/ai/remediate`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    code,
+                    language,
+                    vulnerability_description: vulnerability_description || null
+                })
+            });
+
+            if (!response.ok) {
+                const err = await response.json();
+                throw new Error(err.detail || "Erreur de communication avec le serveur.");
+            }
+
+            const data = await response.json();
+
+            // Display results
+            explanationEl.innerHTML = formatAIResponseText(data.explanation);
+            
+            // Clean up code block representation
+            fixedCodeEl.innerText = data.fixed_code;
+
+            loadingDiv.style.display = "none";
+            outputDiv.style.display = "block";
+        } catch (error) {
+            console.error("Remediation error:", error);
+            loadingDiv.style.display = "none";
+            waitingDiv.style.display = "block";
+            waitingDiv.innerHTML = `<span class="text-error">Erreur lors de l'analyse : ${error.message || "Serveur injoignable"}</span>`;
+        } finally {
+            submitBtn.disabled = false;
+        }
+    });
+}
+
