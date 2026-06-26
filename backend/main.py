@@ -265,17 +265,17 @@ async def chat_with_copilot(chat_in: AIChatRequest):
     )
 
     response_text = ""
-    
-    # 1. Check if DigitalOcean / OpenAI compatible router is configured
-    if settings.AI_API_KEY:
+    errors = []
+
+    async def try_digitalocean():
+        if not settings.AI_API_KEY:
+            return None, "DigitalOcean API key not configured."
         try:
             import httpx
-            # Normalize target URL
             url = settings.AI_BASE_URL.rstrip("/")
             if not url.endswith("/chat/completions"):
                 url += "/chat/completions"
 
-            # Construct messages list with history
             messages = [{"role": "system", "content": system_instruction}]
             if chat_in.history:
                 for msg in chat_in.history:
@@ -296,22 +296,16 @@ async def chat_with_copilot(chat_in: AIChatRequest):
                     },
                     timeout=45.0
                 )
-                
                 if response.status_code != 200:
-                    raise HTTPException(
-                        status_code=response.status_code, 
-                        detail=f"Erreur Routeur DO: {response.text}"
-                    )
-                
+                    return None, f"HTTP {response.status_code}: {response.text}"
                 res_data = response.json()
-                response_text = res_data["choices"][0]["message"]["content"]
-                
+                return res_data["choices"][0]["message"]["content"], None
         except Exception as e:
-            print(f"[AI Router Error] {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Erreur de communication avec l'IA DigitalOcean: {str(e)}")
+            return None, str(e)
 
-    # 2. Fallback to Gemini if configured
-    elif settings.GEMINI_API_KEY:
+    async def try_gemini():
+        if not settings.GEMINI_API_KEY:
+            return None, "Gemini API key not configured."
         try:
             model = genai.GenerativeModel(
                 model_name="gemini-1.5-flash",
@@ -325,20 +319,38 @@ async def chat_with_copilot(chat_in: AIChatRequest):
 
             chat = model.start_chat(history=gemini_history)
             response = chat.send_message(chat_in.message)
-            response_text = response.text
+            return response.text, None
         except Exception as e:
-            print(f"[Gemini AI Error] {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Erreur de communication avec Gemini: {str(e)}")
-            
-    # 3. Not configured warning
+            return None, str(e)
+
+    providers = []
+    if settings.AI_PROVIDER == "digitalocean":
+        providers = [("digitalocean", try_digitalocean), ("gemini", try_gemini)]
     else:
-        return {
-            "response": "Le Cyber Copilot IA n'est pas activé car aucune clé d'API (`AI_API_KEY` pour DigitalOcean ou `GEMINI_API_KEY`) n'a été configurée dans votre fichier `.env` sur le Droplet. Veuillez renseigner cette clé puis redémarrer le conteneur.",
-            "suggested_actions": [
-                "Ajouter AI_API_KEY dans le fichier .env",
-                "Redémarrer le docker compose"
-            ]
-        }
+        providers = [("gemini", try_gemini), ("digitalocean", try_digitalocean)]
+
+    for name, func in providers:
+        res, err = await func()
+        if res:
+            response_text = res
+            break
+        elif err:
+            errors.append(f"{name}: {err}")
+
+    if not response_text:
+        if not settings.AI_API_KEY and not settings.GEMINI_API_KEY:
+            return {
+                "response": "Le Cyber Copilot IA n'est pas activé car aucune clé d'API (`AI_API_KEY` pour DigitalOcean ou `GEMINI_API_KEY`) n'a été configurée dans votre fichier `.env` sur le Droplet. Veuillez renseigner cette clé puis redémarrer le conteneur.",
+                "suggested_actions": [
+                    "Ajouter GEMINI_API_KEY ou AI_API_KEY dans le fichier .env",
+                    "Redémarrer le docker compose"
+                ]
+            }
+        detail_msg = " | ".join(errors) if errors else "Aucun fournisseur d'IA n'est disponible."
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur de communication avec les services d'IA. Détails: {detail_msg}"
+        )
 
     # Supply recommendations based on context_type
     suggestions = []
@@ -393,9 +405,11 @@ async def remediate_code(req: RemediationRequest):
     )
 
     response_text = ""
+    errors = []
 
-    # 1. DigitalOcean / OpenAI compatible router
-    if settings.AI_API_KEY:
+    async def try_digitalocean():
+        if not settings.AI_API_KEY:
+            return None, "DigitalOcean API key not configured."
         try:
             import httpx
             url = settings.AI_BASE_URL.rstrip("/")
@@ -418,38 +432,45 @@ async def remediate_code(req: RemediationRequest):
                     },
                     timeout=45.0
                 )
-                
                 if response.status_code != 200:
-                    raise HTTPException(
-                        status_code=response.status_code, 
-                        detail=f"Erreur Routeur DO: {response.text}"
-                    )
-                
+                    return None, f"HTTP {response.status_code}: {response.text}"
                 res_data = response.json()
-                response_text = res_data["choices"][0]["message"]["content"]
-                
+                return res_data["choices"][0]["message"]["content"], None
         except Exception as e:
-            print(f"[AI Router Error] {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Erreur de communication avec l'IA DigitalOcean: {str(e)}")
+            return None, str(e)
 
-    # 2. Fallback to Gemini if configured
-    elif settings.GEMINI_API_KEY:
+    async def try_gemini():
+        if not settings.GEMINI_API_KEY:
+            return None, "Gemini API key not configured."
         try:
             model = genai.GenerativeModel(
                 model_name="gemini-1.5-flash",
                 system_instruction=system_instruction
             )
             response = model.generate_content(prompt)
-            response_text = response.text
+            return response.text, None
         except Exception as e:
-            print(f"[Gemini AI Error] {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Erreur de communication avec Gemini: {str(e)}")
-            
-    # 3. Not configured warning
+            return None, str(e)
+
+    providers = []
+    if settings.AI_PROVIDER == "digitalocean":
+        providers = [("digitalocean", try_digitalocean), ("gemini", try_gemini)]
     else:
+        providers = [("gemini", try_gemini), ("digitalocean", try_digitalocean)]
+
+    for name, func in providers:
+        res, err = await func()
+        if res:
+            response_text = res
+            break
+        elif err:
+            errors.append(f"{name}: {err}")
+
+    if not response_text:
+        detail_msg = " | ".join(errors) if errors else "Aucun fournisseur d'IA n'est configuré."
         raise HTTPException(
-            status_code=501, 
-            detail="Le Cyber Copilot IA n'est pas configuré. Veuillez renseigner GEMINI_API_KEY ou AI_API_KEY dans votre fichier .env."
+            status_code=501,
+            detail=f"Le Cyber Copilot IA n'est pas configuré ou a échoué. Détails: {detail_msg}"
         )
 
     # Parse the response to extract explanation and fixed_code

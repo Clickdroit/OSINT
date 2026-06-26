@@ -395,9 +395,11 @@ def generate_ai_domain_report(domain: str, dns_txt: list, dns_mx: list, headers_
     )
     
     response_text = ""
-    
-    # 1. DigitalOcean AI Router
-    if settings.AI_API_KEY:
+    errors = []
+
+    def try_digitalocean():
+        if not settings.AI_API_KEY:
+            return None, "DigitalOcean API key not configured."
         try:
             url = settings.AI_BASE_URL.rstrip("/")
             if not url.endswith("/chat/completions"):
@@ -418,23 +420,40 @@ def generate_ai_domain_report(domain: str, dns_txt: list, dns_mx: list, headers_
                 },
                 timeout=45.0
             )
-            if response.status_code == 200:
-                res_data = response.json()
-                response_text = res_data["choices"][0]["message"]["content"]
+            if response.status_code != 200:
+                return None, f"HTTP {response.status_code}: {response.text}"
+            res_data = response.json()
+            return res_data["choices"][0]["message"]["content"], None
         except Exception as e:
-            print(f"[AI Router Error] Failed to generate domain report: {str(e)}")
-            
-    # 2. Fallback to Gemini SDK
-    if not response_text and settings.GEMINI_API_KEY:
+            return None, str(e)
+
+    def try_gemini():
+        if not settings.GEMINI_API_KEY:
+            return None, "Gemini API key not configured."
         try:
             model = genai.GenerativeModel(
                 model_name="gemini-1.5-flash",
                 system_instruction=system_instruction
             )
             response = model.generate_content(prompt)
-            response_text = response.text
+            return response.text, None
         except Exception as e:
-            print(f"[Gemini AI Error] Failed to generate domain report: {str(e)}")
+            return None, str(e)
+
+    providers = []
+    if settings.AI_PROVIDER == "digitalocean":
+        providers = [("digitalocean", try_digitalocean), ("gemini", try_gemini)]
+    else:
+        providers = [("gemini", try_gemini), ("digitalocean", try_digitalocean)]
+
+    for name, func in providers:
+        res, err = func()
+        if res:
+            response_text = res
+            break
+        elif err:
+            errors.append(f"{name}: {err}")
+            print(f"[{name.upper()} AI Error] Failed to generate domain report: {err}")
             
     # 3. Static fallback
     if not response_text:
