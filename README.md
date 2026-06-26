@@ -118,3 +118,36 @@ Requires Python 3.10+, PostgreSQL, and Redis installed locally.
   ```
 - **List Alert Alarms**: `GET /api/v1/alerts`
 - **Force Instant Feed Check**: `POST /api/v1/rss/trigger`
+
+---
+
+## Cyber Copilot AI (Analyste Cyber IA)
+
+L'application intègre un **Assistant d'Analyse Cyber / Copilot** qui aide à interpréter les menaces et à élaborer des stratégies de défense.
+
+### Ce que fait l'IA
+1. **Explication de Filles de Sécurité (CVE)** : À partir de l'onglet de Veille RSS, si une vulnérabilité (ex. Zero-Day, Ransomware) apparaît, l'IA explique le fonctionnement technique de la faille en français simple et vulgarisé.
+2. **Recommandations de Remédiation** : Si vous recherchez un mail compromis dans la base de fuites, l'IA suggère des protocoles de sécurité immédiats (changement de mots de passe, mise en place de clés de sécurité matérielles U2F, détection d'emails de phishing ciblés).
+3. **Suggestions Dynamiques** : Après chaque réponse, l'IA formule des "actions suggérées" sous forme de boutons cliquables. Cliquer sur l'un d'eux interroge l'IA pour obtenir la procédure technique pas à pas (ex. *"Comment activer la MFA ?"*).
+
+### Comment ça marche (Architecture)
+- **API Unifiée** : Le backend FastAPI expose une route asynchrone `POST /api/v1/ai/chat` qui prend en charge l'historique et le type de contexte (leaks, alerts, général).
+- **Double Compatibilité** : 
+  - **Option A (DigitalOcean AI Router)** : Utilise l'API d'inférence de DigitalOcean pour interroger le modèle **Llama 3.3 70B Instruct** avec des requêtes HTTP asynchrones non-bloquantes via `httpx`.
+  - **Option B (Google Gemini)** : Utilise le SDK officiel `google-generativeai` pour interroger **Gemini 1.5 Flash**.
+- **Instructions Système** : L'IA est guidée par un prompt système strict pour conserver un profil d'analyste défensif technique, concis et professionnel.
+
+### Configuration dans le `.env`
+Pour activer l'IA sur le Droplet, modifiez le fichier `.env` :
+
+```text
+# Pour utiliser le routeur d'IA DigitalOcean (Recommandé) :
+AI_PROVIDER=digitalocean
+AI_API_KEY=vdoo_v1_...votre_cle_digitalocean...
+AI_BASE_URL=https://inference.do-ai.run/v1
+AI_MODEL_NAME=router:osint
+
+# OU pour utiliser Google Gemini (Alternative) :
+GEMINI_API_KEY=AIzaSy...votre_cle_gemini...
+```
+
