@@ -47,6 +47,8 @@ services:
       - REDIS_HOST=redis
       - APP_NAME=OSINT & Private Intelligence Hub (Prod)
       - DEBUG=False
+    volumes:
+      - ./data:/app/data
     depends_on:
       db:
         condition: service_healthy
@@ -65,6 +67,8 @@ services:
       - POSTGRES_PASSWORD=secure_db_password
       - POSTGRES_DB=hub_osint
       - REDIS_HOST=redis
+    volumes:
+      - ./data:/app/data
     depends_on:
       db:
         condition: service_healthy
@@ -84,6 +88,8 @@ services:
       - POSTGRES_PASSWORD=secure_db_password
       - POSTGRES_DB=hub_osint
       - REDIS_HOST=redis
+    volumes:
+      - ./data:/app/data
     depends_on:
       db:
         condition: service_healthy
