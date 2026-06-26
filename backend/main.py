@@ -230,65 +230,107 @@ def trigger_rss_check():
 # --- GEMINI AI COPILOT ENDPOINT ---
 
 @app.post("/api/v1/ai/chat", response_model=AIChatResponse)
-def chat_with_copilot(chat_in: AIChatRequest):
-    if not settings.GEMINI_API_KEY:
-        return {
-            "response": "Le Cyber Copilot IA n'est pas activé car la clé `GEMINI_API_KEY` n'a pas été configurée dans votre fichier `.env` sur le Droplet. Veuillez renseigner cette clé puis redémarrer le conteneur.",
-            "suggested_actions": [
-                "Renseigner GEMINI_API_KEY dans le fichier .env",
-                "Redémarrer docker compose via: docker compose up -d --build"
-            ]
-        }
+async def chat_with_copilot(chat_in: AIChatRequest):
+    # Define model with strict threat intelligence guidelines
+    system_instruction = (
+        "Tu es 'Cyber Copilot', un assistant d'analyse en cybersécurité et en renseignement (OSINT) intégré "
+        "dans un hub privé de surveillance. Ton but est d'analyser les menaces et de recommander "
+        "des stratégies de défense concrètes.\n\n"
+        "DIRECTIVES DE RÉPONSE :\n"
+        "1. Reste concentré sur la cybersécurité, les menaces, la remédiation et la protection des cibles.\n"
+        "2. Si l'utilisateur pose une question sur un email ou pseudo compromis, suggère des protocoles de sécurité "
+        "(changement de mot de passe, clé de sécurité U2F, alerte phishing, surveillance active).\n"
+        "3. Si l'utilisateur te soumet une alerte de sécurité (ex. CVE, ransomware), explique la faille en termes "
+        "clairs et propose des mesures de mitigation (pare-feu, désactivation de port, patch de version).\n"
+        "4. Adopte un ton professionnel, pragmatique et technique.\n"
+        "5. Réponds en français de manière structurée et concise."
+    )
+
+    response_text = ""
     
-    try:
-        # Define model with strict threat intelligence guidelines
-        system_instruction = (
-            "Tu es 'Cyber Copilot', un assistant d'analyse en cybersécurité et en renseignement (OSINT) intégré "
-            "dans un hub privé de surveillance. Ton but est d'analyser les menaces et de recommander "
-            "des stratégies de défense concrètes.\n\n"
-            "DIRECTIVES DE RÉPONSE :\n"
-            "1. Reste concentré sur la cybersécurité, les menaces, la remédiation et la protection des cibles.\n"
-            "2. Si l'utilisateur pose une question sur un email ou pseudo compromis, suggère des protocoles de sécurité "
-            "(changement de mot de passe, clé de sécurité U2F, alerte phishing, surveillance active).\n"
-            "3. Si l'utilisateur te soumet une alerte de sécurité (ex. CVE, ransomware), explique la faille en termes "
-            "clairs et propose des mesures de mitigation (pare-feu, désactivation de port, patch de version).\n"
-            "4. Adopte un ton professionnel, pragmatique et technique.\n"
-            "5. Réponds en français de manière structurée et concise."
-        )
-        
-        model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
-            system_instruction=system_instruction
-        )
-        
-        # Query model
-        response = model.generate_content(chat_in.message)
-        
-        # Supply recommendations based on context_type
-        suggestions = []
-        if chat_in.context_type == "leaks":
-            suggestions = [
-                "Activer l'authentification multifacteur (MFA)",
-                "Changer immédiatement le mot de passe sur tous les services liés",
-                "Vérifier les activités de connexion suspectes"
-            ]
-        elif chat_in.context_type == "alerts":
-            suggestions = [
-                "Rechercher et appliquer le correctif de sécurité officiel",
-                "Restreindre les accès réseau liés au service vulnérable",
-                "Scanner vos systèmes à la recherche de signatures IoC"
-            ]
-        else:
-            suggestions = [
-                "Vérifier la politique de mots de passe",
-                "Sensibiliser les équipes au phishing ciblé"
-            ]
+    # 1. Check if DigitalOcean / OpenAI compatible router is configured
+    if settings.AI_API_KEY:
+        try:
+            import httpx
+            # Normalize target URL
+            url = settings.AI_BASE_URL.rstrip("/")
+            if not url.endswith("/chat/completions"):
+                url += "/chat/completions"
+
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    url,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {settings.AI_API_KEY}"
+                    },
+                    json={
+                        "model": settings.AI_MODEL_NAME,
+                        "messages": [
+                            {"role": "system", "content": system_instruction},
+                            {"role": "user", "content": chat_in.message}
+                        ]
+                    },
+                    timeout=45.0
+                )
+                
+                if response.status_code != 200:
+                    raise HTTPException(
+                        status_code=response.status_code, 
+                        detail=f"Erreur Routeur DO: {response.text}"
+                    )
+                
+                res_data = response.json()
+                response_text = res_data["choices"][0]["message"]["content"]
+                
+        except Exception as e:
+            print(f"[AI Router Error] {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Erreur de communication avec l'IA DigitalOcean: {str(e)}")
+
+    # 2. Fallback to Gemini if configured
+    elif settings.GEMINI_API_KEY:
+        try:
+            model = genai.GenerativeModel(
+                model_name="gemini-1.5-flash",
+                system_instruction=system_instruction
+            )
+            response = model.generate_content(chat_in.message)
+            response_text = response.text
+        except Exception as e:
+            print(f"[Gemini AI Error] {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Erreur de communication avec Gemini: {str(e)}")
             
+    # 3. Not configured warning
+    else:
         return {
-            "response": response.text,
-            "suggested_actions": suggestions
+            "response": "Le Cyber Copilot IA n'est pas activé car aucune clé d'API (`AI_API_KEY` pour DigitalOcean ou `GEMINI_API_KEY`) n'a été configurée dans votre fichier `.env` sur le Droplet. Veuillez renseigner cette clé puis redémarrer le conteneur.",
+            "suggested_actions": [
+                "Ajouter AI_API_KEY dans le fichier .env",
+                "Redémarrer le docker compose"
+            ]
         }
+
+    # Supply recommendations based on context_type
+    suggestions = []
+    if chat_in.context_type == "leaks":
+        suggestions = [
+            "Activer l'authentification multifacteur (MFA)",
+            "Changer immédiatement le mot de passe sur tous les services liés",
+            "Vérifier les activités de connexion suspectes"
+        ]
+    elif chat_in.context_type == "alerts":
+        suggestions = [
+            "Rechercher et appliquer le correctif de sécurité officiel",
+            "Restreindre les accès réseau liés au service vulnérable",
+            "Scanner vos systèmes à la recherche de signatures IoC"
+        ]
+    else:
+        suggestions = [
+            "Vérifier la politique de mots de passe",
+            "Sensibiliser les équipes au phishing ciblé"
+        ]
         
-    except Exception as e:
-        print(f"[AI Copilot Error] {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Erreur de communication avec l'IA: {str(e)}")
+    return {
+        "response": response_text,
+        "suggested_actions": suggestions
+    }

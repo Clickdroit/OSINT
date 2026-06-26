@@ -29,8 +29,14 @@ class Settings(BaseSettings):
     APP_NAME: str = Field(default="OSINT & Private Intelligence Hub")
     DEBUG: bool = Field(default=True)
     
-    # Gemini API Configuration
+    # Gemini API Configuration (Legacy/Backup)
     GEMINI_API_KEY: str | None = Field(default=None)
+
+    # Universal AI Copilot settings (DigitalOcean / OpenAI / Mistral compatible)
+    AI_PROVIDER: str = Field(default="gemini") # "gemini" or "digitalocean"
+    AI_API_KEY: str | None = Field(default=None)
+    AI_BASE_URL: str = Field(default="https://inference.do-ai.run/v1")
+    AI_MODEL_NAME: str = Field(default="router:osint")
 
     model_config = SettingsConfigDict(
         env_file=".env",
