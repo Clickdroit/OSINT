@@ -163,7 +163,7 @@
                 </div>
                 <div class="scan-meta">
                     <span id="scan-target-name">Cible: None</span>
-                    <button class="btn btn-accent" id="start-scan-btn">Lancer la recherche (100+ sites)</button>
+                    <button class="btn btn-accent" id="start-scan-btn">Lancer la recherche (110+ sites)</button>
                 </div>
                 
                 <div class="scan-progress-bar-container" style="display: none;" id="scan-progress-container">
@@ -177,6 +177,18 @@
                     <div class="stat-box"><span class="stat-number text-success" id="stat-found">0</span><span class="stat-label">Profils trouvés</span></div>
                     <div class="stat-box"><span class="stat-number text-muted" id="stat-notfound">0</span><span class="stat-label">Non trouvés</span></div>
                     <div class="stat-box"><span class="stat-number text-error" id="stat-error">0</span><span class="stat-label">Erreurs</span></div>
+                    <button class="btn btn-export" id="export-csv-btn" style="display:none;" title="Exporter les profils trouvés en CSV">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        Exporter CSV
+                    </button>
+                </div>
+
+                <!-- Filter bar — only shown for username scans -->
+                <div class="scan-filter-bar" id="scan-filter-bar" style="display: none;">
+                    <button class="filter-btn active" data-filter="all">Tous</button>
+                    <button class="filter-btn" data-filter="FOUND">✅ Trouvés</button>
+                    <button class="filter-btn" data-filter="NOT_FOUND">❌ Absents</button>
+                    <button class="filter-btn" data-filter="ERROR">⚠️ Erreurs</button>
                 </div>
 
                 <div class="results-grid" id="scan-results-grid">
@@ -184,6 +196,7 @@
                 </div>
             </div>
         </section>
+
 
         <section class="tab-content" id="tab-leaks">
             <div class="grid-two-cols">

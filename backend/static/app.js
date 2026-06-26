@@ -84,6 +84,13 @@ function initTargets() {
         document.getElementById("scan-results-card").style.display = "none";
         clearInterval(scanPollInterval);
     });
+
+    // Wire up filter bar
+    initFilterBar();
+
+    // Wire up export CSV button
+    const exportCsvBtn = document.getElementById("export-csv-btn");
+    if (exportCsvBtn) exportCsvBtn.addEventListener("click", exportCSV);
 }
 
 async function fetchTargets() {
@@ -177,7 +184,7 @@ function showScanPanel(targetId, targetValue, targetType) {
     document.getElementById("scan-results-card").style.display = "block";
     
     let panelTitle = `Analyse d'Alias : ${targetValue}`;
-    let scanBtnLabel = `Lancer la recherche (100+ sites)`;
+    let scanBtnLabel = `Lancer la recherche (110+ sites)`;
     if (targetType === "domain") {
         panelTitle = `Audit de Sécurité Domaine : ${targetValue}`;
         scanBtnLabel = `Lancer l'audit de sécurité`;
@@ -189,6 +196,21 @@ function showScanPanel(targetId, targetValue, targetType) {
     document.getElementById("results-title").innerText = panelTitle;
     document.getElementById("scan-target-name").innerText = `Cible active : ${targetValue}`;
     document.getElementById("start-scan-btn").innerText = scanBtnLabel;
+    
+    // Show filter bar & export only for username scans
+    const filterBar = document.getElementById("scan-filter-bar");
+    const exportBtn = document.getElementById("export-csv-btn");
+    if (targetType === "username") {
+        filterBar.style.display = "flex";
+    } else {
+        filterBar.style.display = "none";
+        if (exportBtn) exportBtn.style.display = "none";
+    }
+
+    // Reset active filter
+    document.querySelectorAll(".filter-btn").forEach(b => b.classList.remove("active"));
+    const allBtn = document.querySelector(".filter-btn[data-filter='all']");
+    if (allBtn) allBtn.classList.add("active");
     
     // Hide details during initialization
     document.getElementById("scan-progress-container").style.display = "none";
@@ -223,103 +245,197 @@ async function fetchScanResults(targetId) {
     }
 }
 
-function renderResultsGrid(results) {
+// Category display names
+const CATEGORY_LABELS = {
+    social: "🌐 Réseaux Sociaux",
+    dev: "💻 Développement & Tech",
+    gaming: "🎮 Gaming",
+    creative: "🎨 Créatif & Art",
+    music: "🎵 Musique & Vidéo",
+    financial: "💰 Finance & Support",
+    security: "🔐 Cybersécurité & CTF",
+    other: "📦 Autres"
+};
+const CATEGORY_ORDER = ["social", "dev", "gaming", "creative", "music", "financial", "security", "other"];
+
+let allScanResults = []; // Store full results for filtering
+let activeFilter = "all";
+
+function renderResultsGrid(results, filterStatus = "all") {
+    allScanResults = results;
     const grid = document.getElementById("scan-results-grid");
     grid.innerHTML = "";
-    
-    results.forEach(res => {
-        if (res.platform === "Rapport de Sécurité IA") {
-            const reportCard = document.createElement("div");
-            reportCard.className = "result-card status-found ai-report-full-width";
-            reportCard.style.gridColumn = "1 / -1";
-            reportCard.style.border = "1px solid var(--accent-glow)";
-            reportCard.innerHTML = `
-                <div class="result-info" style="width: 100%;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 10px; margin-bottom: 15px; width: 100%;">
-                        <span class="result-name" style="font-size: 1.1rem; color: var(--accent); font-weight: 700;">${res.platform}</span>
-                        <span class="badge badge-domain">Analyse IA</span>
-                    </div>
-                    <div class="markdown-body" style="font-size: 0.95rem; color: var(--text-secondary); line-height: 1.6; text-align: justify; width: 100%;">
-                        ${formatAIResponseText(res.details)}
-                    </div>
-                </div>
-            `;
-            grid.appendChild(reportCard);
-        } else {
-            const card = document.createElement("div");
-            const statusClass = res.status.toLowerCase(); // found, notfound, error
-            card.className = `result-card status-${statusClass}`;
-            
-            const isFound = res.status === "FOUND";
-            
-            // Custom labels for domain scan vs username mapping
-            let statusLabel = res.status === "FOUND" ? "TROUVÉ" : res.status === "NOT_FOUND" ? "ABSENT" : "ERREUR";
-            if (activeTargetType === "domain") {
-                statusLabel = res.status === "FOUND" ? "SÉCURISÉ" : res.status === "NOT_FOUND" ? "ALERTE" : "ERREUR";
-            }
-            
-            let actionHtml = "";
-            if (isFound && res.url) {
-                actionHtml = `<a href="${res.url}" target="_blank" class="result-link">Accéder &rarr;</a>`;
-            } else if (res.details) {
-                actionHtml = `<span class="text-muted" style="font-size:0.8rem; display:block; margin-top:5px; line-height:1.4;">${res.details}</span>`;
-            } else {
-                actionHtml = `<span class="text-muted" style="font-size:0.75rem;">Non détecté</span>`;
-            }
 
-            card.innerHTML = `
-                <div class="result-info">
-                    <span class="result-name">${res.platform}</span>
-                    ${actionHtml}
-                </div>
-                <span class="result-status-tag">${statusLabel}</span>
-            `;
-            grid.appendChild(card);
+    const AI_PLATFORMS = ["Rapport de Sécurité IA", "Rapport OSINT IA"];
+
+    // Separate AI report from normal results
+    const aiReports = results.filter(r => AI_PLATFORMS.includes(r.platform));
+    const normalResults = results.filter(r => !AI_PLATFORMS.includes(r.platform));
+
+    // Apply status filter
+    const filtered = filterStatus === "all" ? normalResults : normalResults.filter(r => r.status === filterStatus);
+
+    if (activeTargetType === "username") {
+        // Group by category (stored in details field)
+        const groups = {};
+        filtered.forEach(res => {
+            const cat = res.details || "other";
+            if (!groups[cat]) groups[cat] = [];
+            groups[cat].push(res);
+        });
+
+        // Render each category group
+        CATEGORY_ORDER.forEach(cat => {
+            if (!groups[cat] || groups[cat].length === 0) return;
+            
+            const header = document.createElement("div");
+            header.className = "category-header";
+            header.style.gridColumn = "1 / -1";
+            header.innerHTML = `<span>${CATEGORY_LABELS[cat] || cat}</span><span class="category-count">${groups[cat].length} résultat${groups[cat].length > 1 ? 's' : ''}</span>`;
+            grid.appendChild(header);
+
+            groups[cat].forEach(res => grid.appendChild(buildResultCard(res)));
+        });
+
+        if (filtered.length === 0) {
+            grid.innerHTML = `<div class="pad-20 text-center text-muted" style="grid-column:1/-1">Aucun résultat pour ce filtre.</div>`;
         }
+    } else {
+        // Domain / email: render flat list
+        filtered.forEach(res => grid.appendChild(buildResultCard(res)));
+        if (filtered.length === 0) {
+            grid.innerHTML = `<div class="pad-20 text-center text-muted" style="grid-column:1/-1">Aucun résultat.</div>`;
+        }
+    }
+
+    // Always render AI reports at the bottom, full width
+    aiReports.forEach(res => {
+        const reportCard = document.createElement("div");
+        reportCard.className = "result-card status-found ai-report-full-width";
+        reportCard.style.gridColumn = "1 / -1";
+        reportCard.style.border = "1px solid var(--accent-glow)";
+        const badge = res.platform === "Rapport OSINT IA" ? "Analyse OSINT IA" : "Analyse IA";
+        reportCard.innerHTML = `
+            <div class="result-info" style="width: 100%;">
+                <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 10px; margin-bottom: 15px; width: 100%;">
+                    <span class="result-name" style="font-size: 1.1rem; color: var(--accent); font-weight: 700;">${res.platform}</span>
+                    <span class="badge badge-domain">${badge}</span>
+                </div>
+                <div class="markdown-body" style="font-size: 0.95rem; color: var(--text-secondary); line-height: 1.6; text-align: justify; width: 100%;">
+                    ${formatAIResponseText(res.details)}
+                </div>
+            </div>
+        `;
+        grid.appendChild(reportCard);
     });
+}
+
+function buildResultCard(res) {
+    const card = document.createElement("div");
+    const statusClass = res.status.toLowerCase();
+    card.className = `result-card status-${statusClass}`;
+    card.dataset.status = res.status;
+
+    const isFound = res.status === "FOUND";
+    let statusLabel = res.status === "FOUND" ? "TROUVÉ" : res.status === "NOT_FOUND" ? "ABSENT" : "ERREUR";
+    if (activeTargetType === "domain") {
+        statusLabel = res.status === "FOUND" ? "SÉCURISÉ" : res.status === "NOT_FOUND" ? "ALERTE" : "ERREUR";
+    }
+
+    let actionHtml = "";
+    if (isFound && res.url && activeTargetType !== "username") {
+        actionHtml = `<a href="${res.url}" target="_blank" class="result-link">Accéder &rarr;</a>`;
+    } else if (isFound && res.url && activeTargetType === "username") {
+        actionHtml = `<a href="${res.url}" target="_blank" class="btn-profile-link">Voir le profil →</a>`;
+    } else if (res.status === "NOT_FOUND" && activeTargetType === "username") {
+        actionHtml = ``;
+    } else if (res.details && activeTargetType !== "username") {
+        actionHtml = `<span class="text-muted" style="font-size:0.8rem; display:block; margin-top:5px; line-height:1.4;">${res.details}</span>`;
+    } else {
+        actionHtml = `<span class="text-muted" style="font-size:0.75rem;">Non détecté</span>`;
+    }
+
+    card.innerHTML = `
+        <div class="result-info">
+            <span class="result-name">${res.platform}</span>
+            ${actionHtml}
+        </div>
+        <span class="result-status-tag">${statusLabel}</span>
+    `;
+    return card;
+}
+
+function initFilterBar() {
+    document.querySelectorAll(".filter-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+            document.querySelectorAll(".filter-btn").forEach(b => b.classList.remove("active"));
+            btn.classList.add("active");
+            activeFilter = btn.dataset.filter;
+            renderResultsGrid(allScanResults, activeFilter);
+        });
+    });
+}
+
+function exportCSV() {
+    const found = allScanResults.filter(r => r.status === "FOUND" && r.url && !["Rapport OSINT IA", "Rapport de Sécurité IA"].includes(r.platform));
+    if (found.length === 0) { alert("Aucun profil trouvé à exporter."); return; }
+    const rows = [["Plateforme", "URL", "Pseudo"]];
+    found.forEach(r => rows.push([r.platform, r.url, activeTargetValue]));
+    const csv = rows.map(r => r.map(v => `"${(v||"").replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `osint_${activeTargetValue}_profils.csv`;
+    a.click();
+}
+
+function animateCounter(el, target) {
+    const duration = 600;
+    const start = parseInt(el.innerText) || 0;
+    const startTime = performance.now();
+    const update = (now) => {
+        const elapsed = now - startTime;
+        const progress = Math.min(elapsed / duration, 1);
+        el.innerText = Math.round(start + (target - start) * progress);
+        if (progress < 1) requestAnimationFrame(update);
+    };
+    requestAnimationFrame(update);
 }
 
 function displayStats(results) {
     document.getElementById("scan-stats").style.display = "grid";
     
+    const AI_PLATFORMS = ["Rapport de Sécurité IA", "Rapport OSINT IA"];
     const labelFound = document.querySelector("#scan-stats .stat-box:nth-child(1) .stat-label");
     const labelNotFound = document.querySelector("#scan-stats .stat-box:nth-child(2) .stat-label");
+    const exportBtn = document.getElementById("export-csv-btn");
     
+    // Exclude AI report rows from counts
+    const countable = results.filter(r => !AI_PLATFORMS.includes(r.platform));
+    const found = countable.filter(r => r.status === "FOUND").length;
+    const notfound = countable.filter(r => r.status === "NOT_FOUND").length;
+    const error = countable.filter(r => r.status === "ERROR").length;
+
     if (activeTargetType === "domain") {
         if (labelFound) labelFound.innerText = "Sécurisés / Présents";
         if (labelNotFound) labelNotFound.innerText = "Alertes / Manquants";
-        
-        // Exclude the AI Report row from raw counts
-        const auditResults = results.filter(r => r.platform !== "Rapport de Sécurité IA");
-        const secFound = auditResults.filter(r => r.status === "FOUND").length;
-        const secNotFound = auditResults.filter(r => r.status === "NOT_FOUND").length;
-        const secError = auditResults.filter(r => r.status === "ERROR").length;
-        
-        document.getElementById("stat-found").innerText = secFound;
-        document.getElementById("stat-notfound").innerText = secNotFound;
-        document.getElementById("stat-error").innerText = secError;
     } else if (activeTargetType === "email") {
         if (labelFound) labelFound.innerText = "Fuites / Profils Détectés";
         if (labelNotFound) labelNotFound.innerText = "Non détectés / Sécurisés";
-        
-        const found = results.filter(r => r.status === "FOUND").length;
-        const notfound = results.filter(r => r.status === "NOT_FOUND").length;
-        const error = results.filter(r => r.status === "ERROR").length;
-        
-        document.getElementById("stat-found").innerText = found;
-        document.getElementById("stat-notfound").innerText = notfound;
-        document.getElementById("stat-error").innerText = error;
     } else {
         if (labelFound) labelFound.innerText = "Profils trouvés";
         if (labelNotFound) labelNotFound.innerText = "Non trouvés";
-        
-        const found = results.filter(r => r.status === "FOUND").length;
-        const notfound = results.filter(r => r.status === "NOT_FOUND").length;
-        const error = results.filter(r => r.status === "ERROR").length;
-        
-        document.getElementById("stat-found").innerText = found;
-        document.getElementById("stat-notfound").innerText = notfound;
-        document.getElementById("stat-error").innerText = error;
+    }
+
+    animateCounter(document.getElementById("stat-found"), found);
+    animateCounter(document.getElementById("stat-notfound"), notfound);
+    animateCounter(document.getElementById("stat-error"), error);
+
+    // Show export button only for username scans with results
+    if (exportBtn && activeTargetType === "username" && found > 0) {
+        exportBtn.style.display = "flex";
+    } else if (exportBtn) {
+        exportBtn.style.display = "none";
     }
 }
 

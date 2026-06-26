@@ -57,6 +57,115 @@ async def check_site(client: httpx.AsyncClient, site: dict, username: str, semap
             return {"platform": name, "url": url, "status": "ERROR", "response_code": None}
 
 
+def generate_ai_username_report(username: str, results: list) -> str:
+    """Generate an AI OSINT report summarising the exposure of a username across platforms."""
+    found = [r for r in results if r["status"] == "FOUND"]
+    not_found_count = sum(1 for r in results if r["status"] == "NOT_FOUND")
+    error_count = sum(1 for r in results if r["status"] == "ERROR")
+
+    # Group found platforms by category (category is passed inside the result dict)
+    from workers.site_signatures import SITES
+    site_cat_map = {s["name"]: s.get("category", "other") for s in SITES}
+
+    categories: dict = {}
+    for r in found:
+        cat = site_cat_map.get(r["platform"], "other")
+        categories.setdefault(cat, []).append(r["platform"])
+
+    cat_labels = {
+        "social": "Réseaux Sociaux", "dev": "Développement & Tech",
+        "gaming": "Gaming", "creative": "Créatif & Art",
+        "music": "Musique & Vidéo", "financial": "Finance & Support",
+        "security": "Cybersécurité & CTF", "other": "Autres Plateformes"
+    }
+    platforms_by_cat = "\n".join(
+        f"- **{cat_labels.get(cat, cat)}** : {', '.join(platforms)}"
+        for cat, platforms in sorted(categories.items())
+    ) or "Aucune plateforme détectée."
+
+    exposure_level = (
+        "🔴 **ÉLEVÉE**" if len(found) > 20 else
+        "🟠 **MODÉRÉE**" if len(found) > 10 else
+        "🟡 **FAIBLE**" if len(found) > 3 else
+        "🟢 **TRÈS FAIBLE**"
+    )
+
+    system_instruction = (
+        "Tu es 'Cyber Copilot OSINT Analyst', un expert en intelligence en sources ouvertes (OSINT) "
+        "et en investigation numérique. Tu rédiges des rapports d'exposition numérique pour les analystes "
+        "de cybersécurité en français, de manière professionnelle, concise et structurée."
+    )
+
+    prompt = (
+        f"Génère un rapport d'analyse OSINT au format Markdown pour le pseudo : **{username}**\n\n"
+        f"Données de scan ({len(results)} plateformes analysées) :\n"
+        f"- Profils trouvés : {len(found)}/{len(results)}\n"
+        f"- Non trouvés : {not_found_count}\n"
+        f"- Erreurs réseau : {error_count}\n\n"
+        f"Plateformes détectées par catégorie :\n{platforms_by_cat}\n\n"
+        f"Niveau d'exposition estimé : {exposure_level}\n\n"
+        f"Structure du rapport (3 sections) :\n"
+        f"**1. Synthèse d'Exposition** : évalue le niveau d'exposition global de cette identité numérique.\n"
+        f"**2. Analyse des Risques** : identifie les plateformes ou catégories les plus sensibles du point de vue OPSEC/vie privée.\n"
+        f"**3. Recommandations** : conseille sur comment réduire la surface d'attaque et protéger cette identité (suppression de profils, pseudonymisation, paramètres de confidentialité).\n"
+        f"Ne mets pas d'introduction générique. Démarre directement avec le rapport Markdown."
+    )
+
+    response_text = ""
+    errors = []
+
+    def try_digitalocean():
+        if not settings.AI_API_KEY:
+            return None, "DigitalOcean API key not configured."
+        try:
+            url = settings.AI_BASE_URL.rstrip("/")
+            if not url.endswith("/chat/completions"):
+                url += "/chat/completions"
+            response = httpx.post(
+                url,
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {settings.AI_API_KEY}"},
+                json={"model": settings.AI_MODEL_NAME, "messages": [
+                    {"role": "system", "content": system_instruction},
+                    {"role": "user", "content": prompt}
+                ]},
+                timeout=60.0
+            )
+            if response.status_code != 200:
+                return None, f"HTTP {response.status_code}: {response.text}"
+            return response.json()["choices"][0]["message"]["content"], None
+        except Exception as e:
+            return None, str(e)
+
+    def try_gemini():
+        if not settings.GEMINI_API_KEY:
+            return None, "Gemini API key not configured."
+        try:
+            model = genai.GenerativeModel(model_name="gemini-1.5-flash", system_instruction=system_instruction)
+            return model.generate_content(prompt).text, None
+        except Exception as e:
+            return None, str(e)
+
+    providers = [("digitalocean", try_digitalocean), ("gemini", try_gemini)] if settings.AI_PROVIDER == "digitalocean" else [("gemini", try_gemini), ("digitalocean", try_digitalocean)]
+    for name, func in providers:
+        res, err = func()
+        if res:
+            response_text = res
+            break
+        elif err:
+            errors.append(f"{name}: {err}")
+            print(f"[{name.upper()} AI Error] OSINT report: {err}")
+
+    if not response_text:
+        # Static fallback
+        response_text = (
+            f"## Rapport OSINT - {username}\n\n"
+            f"**Niveau d'exposition** : {exposure_level}\n\n"
+            f"**Profils détectés ({len(found)}/{len(results)})** :\n{platforms_by_cat}\n\n"
+            f"*(L'analyse IA détaillée n'est pas disponible. Vérifiez la configuration GEMINI_API_KEY ou AI_API_KEY.)*"
+        )
+    return response_text
+
+
 async def run_username_scan(target_id: int):
     db = SessionLocal()
     try:
@@ -78,7 +187,7 @@ async def run_username_scan(target_id: int):
             tasks = [check_site(client, site, username, sem) for site in SITES]
             results = await asyncio.gather(*tasks)
 
-        # Bulk insert scan results into the database
+        # Bulk insert scan results into the database (include category)
         db_results = []
         for res in results:
             db_results.append({
@@ -86,17 +195,36 @@ async def run_username_scan(target_id: int):
                 "platform": res["platform"],
                 "url": res["url"] if res["status"] == "FOUND" else None,
                 "status": res["status"],
-                "response_code": res["response_code"]
+                "response_code": res["response_code"],
+                "details": res.get("category", "other")
             })
             
         if db_results:
             db.execute(insert(ScanResult), db_results)
             db.commit()
-            
-        print(f"[Scan] Completed for {username}. Found on {sum(1 for r in results if r['status'] == 'FOUND')}/{len(SITES)} sites.")
+
+        found_results = [r for r in results if r["status"] == "FOUND"]
+        total_found = len(found_results)
+        print(f"[Scan] Completed for {username}. Found on {total_found}/{len(SITES)} sites.")
+
+        # --- Generate AI OSINT Report ---
+        print(f"[Scan] Generating AI OSINT report for: {username}")
+        ai_report = generate_ai_username_report(username, results)
+
+        # Insert AI report as a special ScanResult entry
+        db.execute(insert(ScanResult), [{
+            "target_id": target_id,
+            "platform": "Rapport OSINT IA",
+            "url": None,
+            "status": "FOUND",
+            "response_code": None,
+            "details": ai_report
+        }])
+        db.commit()
 
     finally:
         db.close()
+
 
 
 @celery_app.task(name="workers.tasks.scan_username")

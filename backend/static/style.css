@@ -1060,4 +1060,127 @@ textarea#remediation-code:focus {
     vertical-align: middle;
 }
 
+/* ============================================================
+   USERNAME SCANNER ENHANCEMENTS
+   ============================================================ */
 
+/* Filter bar */
+.scan-filter-bar {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.filter-btn {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    padding: 0.35rem 0.9rem;
+    border-radius: 20px;
+    font-size: 0.82rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-family: inherit;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+}
+
+.filter-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: rgba(0, 242, 254, 0.06);
+}
+
+.filter-btn.active {
+    background: rgba(0, 242, 254, 0.12);
+    border-color: var(--accent);
+    color: var(--accent);
+    box-shadow: 0 0 8px rgba(0, 242, 254, 0.2);
+}
+
+/* Category group header */
+.category-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem 0.75rem;
+    margin-top: 0.75rem;
+    background: rgba(255, 255, 255, 0.03);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 6px 6px 0;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: 0.03em;
+}
+
+.category-header:first-child {
+    margin-top: 0;
+}
+
+.category-count {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    font-weight: 400;
+    background: rgba(255,255,255,0.06);
+    padding: 0.15rem 0.5rem;
+    border-radius: 10px;
+}
+
+/* CSV Export button */
+.btn-export {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: rgba(34, 197, 94, 0.1);
+    border: 1px solid rgba(34, 197, 94, 0.4);
+    color: #22c55e;
+    padding: 0.35rem 0.85rem;
+    border-radius: 8px;
+    font-size: 0.82rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-family: inherit;
+    font-weight: 600;
+    margin-left: auto;
+}
+
+.btn-export:hover {
+    background: rgba(34, 197, 94, 0.2);
+    border-color: #22c55e;
+    box-shadow: 0 0 10px rgba(34, 197, 94, 0.25);
+}
+
+/* Profile link button */
+.btn-profile-link {
+    display: inline-block;
+    margin-top: 0.35rem;
+    padding: 0.25rem 0.65rem;
+    background: rgba(0, 242, 254, 0.08);
+    border: 1px solid rgba(0, 242, 254, 0.25);
+    border-radius: 6px;
+    color: var(--accent);
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-decoration: none;
+    transition: all 0.2s ease;
+}
+
+.btn-profile-link:hover {
+    background: rgba(0, 242, 254, 0.18);
+    border-color: var(--accent);
+    text-decoration: none;
+    box-shadow: 0 0 8px rgba(0, 242, 254, 0.2);
+}
+
+/* Stats summary row with export btn */
+.stats-summary {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+}
