@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OSINT & Private Intelligence Hub</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="cyber-grid"></div>
+
+    <header class="app-header">
+        <div class="header-logo">
+            <svg class="logo-icon" viewBox="0 0 24 24" width="28" height="28">
+                <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" fill="none" stroke="var(--accent-glow)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <h1>OSINT & Intelligence Hub</h1>
+        </div>
+        <div class="system-status">
+            <span class="status-indicator online"></span>
+            <span class="status-text">Système en ligne</span>
+        </div>
+    </header>
+
+    <main class="app-container">
+        <!-- Navigation Tabs -->
+        <nav class="tab-nav">
+            <button class="nav-btn active" data-tab="targets">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v-2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm14 10v-2a4 4 0 0 0-3-3.87m-4-12a4 4 0 0 1 0 7.75"/></svg>
+                Cartographie de Pseudos
+            </button>
+            <button class="nav-btn" data-tab="leaks">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                Base de Fuites (Leaks)
+            </button>
+            <button class="nav-btn" data-tab="alerts">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9m-4.73 13a3 3 0 0 1-5.54 0"/></svg>
+                Veille & Flux RSS
+            </button>
+        </nav>
+
+        <!-- Content Area -->
+        <section class="tab-content active" id="tab-targets">
+            <div class="grid-two-cols">
+                <!-- Left column: Target formulation -->
+                <div class="card card-glow">
+                    <h2>Enregistrer une Cible</h2>
+                    <form id="target-form">
+                        <div class="form-group">
+                            <label for="target-value">Valeur de la Cible</label>
+                            <input type="text" id="target-value" placeholder="ex: JohnDoe, target@email.com, domain.com" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="target-type">Type de Cible</label>
+                            <select id="target-type" required>
+                                <option value="username">Pseudo (Social Mapping)</option>
+                                <option value="email">Email</option>
+                                <option value="domain">Nom de domaine</option>
+                            </select>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Créer la Cible</button>
+                    </form>
+                </div>
+
+                <!-- Right column: Targets list -->
+                <div class="card">
+                    <h2>Registre des Cibles</h2>
+                    <div class="table-container">
+                        <table id="targets-table">
+                            <thead>
+                                <tr>
+                                    <th>Cible</th>
+                                    <th>Type</th>
+                                    <th>Date d'ajout</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <!-- JS Populated -->
+                                <tr><td colspan="4" class="text-center">Chargement des cibles...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Full-width scan section (toggled on selecting target) -->
+            <div class="card margin-top" id="scan-results-card" style="display: none;">
+                <div class="card-header-actions">
+                    <h2 id="results-title">Résultats du Scan</h2>
+                    <button class="btn btn-secondary btn-sm" id="close-results-btn">Masquer</button>
+                </div>
+                <div class="scan-meta">
+                    <span id="scan-target-name">Cible: None</span>
+                    <button class="btn btn-accent" id="start-scan-btn">Lancer la recherche (100+ sites)</button>
+                </div>
+                
+                <div class="scan-progress-bar-container" style="display: none;" id="scan-progress-container">
+                    <div class="scan-progress-bar">
+                        <div class="scan-progress-bar-fill" id="scan-progress-fill"></div>
+                    </div>
+                    <span class="scan-progress-text" id="scan-progress-text">Recherche en cours...</span>
+                </div>
+
+                <div class="stats-summary" id="scan-stats" style="display: none;">
+                    <div class="stat-box"><span class="stat-number text-success" id="stat-found">0</span><span class="stat-label">Profils trouvés</span></div>
+                    <div class="stat-box"><span class="stat-number text-muted" id="stat-notfound">0</span><span class="stat-label">Non trouvés</span></div>
+                    <div class="stat-box"><span class="stat-number text-error" id="stat-error">0</span><span class="stat-label">Erreurs</span></div>
+                </div>
+
+                <div class="results-grid" id="scan-results-grid">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+        </section>
+
+        <section class="tab-content" id="tab-leaks">
+            <div class="grid-two-cols">
+                <!-- Left: Search Leak -->
+                <div class="card card-glow">
+                    <h2>Recherche dans les Fuites</h2>
+                    <div class="form-group">
+                        <label for="leak-query">Email, Pseudo ou Domaine</label>
+                        <div class="search-input-group">
+                            <input type="text" id="leak-query" placeholder="Saisir au moins 3 caractères...">
+                            <button class="btn btn-primary" id="search-leak-btn">Rechercher</button>
+                        </div>
+                    </div>
+                    <div class="form-group checkbox-group">
+                        <input type="checkbox" id="leak-fuzzy">
+                        <label for="leak-fuzzy">Activer la recherche floue / trigramme (GIN index)</label>
+                    </div>
+                    <div class="helper-text">
+                        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                        L'index trigramme GIN permet de trouver des correspondances floues en moins de 10ms.
+                    </div>
+                </div>
+
+                <!-- Right: Ingest File -->
+                <div class="card">
+                    <h2>Ingestion de fichier (Breach Ingest)</h2>
+                    <form id="ingest-form">
+                        <div class="form-group">
+                            <label for="ingest-file-path">Chemin du fichier sur la machine</label>
+                            <input type="text" id="ingest-file-path" placeholder="ex: /app/data/test_leak.txt" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="ingest-source">Source / Nom de la fuite</label>
+                            <input type="text" id="ingest-source" placeholder="ex: LeakTest2026" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="ingest-date">Date de la fuite (Optionnel)</label>
+                            <input type="date" id="ingest-date">
+                        </div>
+                        <button type="submit" class="btn btn-secondary">Lancer l'ingestion asynchrone</button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Search Results -->
+            <div class="card margin-top">
+                <h2>Comptes compromis identifiés</h2>
+                <div class="table-container">
+                    <table id="leaks-table">
+                        <thead>
+                            <tr>
+                                <th>Pseudo</th>
+                                <th>Email</th>
+                                <th>Hash / Mot de passe</th>
+                                <th>Source</th>
+                                <th>Date Ingestion</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr><td colspan="5" class="text-center text-muted">Faites une recherche pour afficher des résultats.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <section class="tab-content" id="tab-alerts">
+            <div class="grid-two-cols">
+                <!-- Left: Manage Keywords -->
+                <div class="card card-glow">
+                    <h2>Mots-clés surveillés</h2>
+                    <form id="keyword-form">
+                        <div class="form-group">
+                            <label for="keyword-value">Ajouter un mot-clé</label>
+                            <div class="search-input-group">
+                                <input type="text" id="keyword-value" placeholder="ex: Ransomware, CVE-2026, SSH" required>
+                                <button type="submit" class="btn btn-primary">Ajouter</button>
+                            </div>
+                        </div>
+                    </form>
+                    <div class="keyword-tags" id="keywords-list">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+
+                <!-- Right: Scraper triggers -->
+                <div class="card">
+                    <h2>Scraper Cyber & Flux RSS</h2>
+                    <p>Le scraper de veille analyse automatiquement toutes les heures les flux RSS de sécurité configurés (BleepingComputer, Sophos, Reddit Netsec) pour détecter les mots-clés configurés.</p>
+                    <div class="margin-top">
+                        <button class="btn btn-accent" id="trigger-rss-btn">Déclencher le Scraper Manuellement</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Alerts logs -->
+            <div class="card margin-top">
+                <h2>Alertes Cyber Déclenchées</h2>
+                <div class="alerts-feed" id="alerts-container">
+                    <!-- Populated by JS -->
+                    <div class="text-center text-muted pad-20">Aucune alerte n'a encore été détectée.</div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="app-footer">
+        <p>OSINT & Private Intelligence Hub &copy; 2026. Construit pour la performance et la sécurité des données.</p>
+    </footer>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,9 +1,12 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import select, or_, text, func
 from typing import List, Optional
+import os
 
 from backend.config import settings
 from backend.database import get_db, init_db
@@ -39,13 +42,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/")
+# Mount the static directory for CSS, JS, etc.
+app.mount("/static", StaticFiles(directory="backend/static"), name="static")
+
+@app.get("/", response_class=HTMLResponse)
 def read_root():
-    return {
-        "status": "online",
-        "app": settings.APP_NAME,
-        "docs": "/docs"
-    }
+    index_path = os.path.join(os.path.dirname(__file__), "static", "index.html")
+    if not os.path.exists(index_path):
+        raise HTTPException(status_code=404, detail="Index HTML not found")
+    with open(index_path, "r", encoding="utf-8") as f:
+        return HTMLResponse(content=f.read())
 
 # --- TARGETS ENDPOINTS ---
 
