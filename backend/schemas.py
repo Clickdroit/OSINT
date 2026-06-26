@@ -11,10 +11,14 @@ class TargetResponse(BaseModel):
     id: int
     value: str
     type: str
+    notes: Optional[str] = None
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+class TargetUpdateNotes(BaseModel):
+    notes: Optional[str] = None
 
 # Scan Result Schemas
 class ScanResultResponse(BaseModel):
@@ -127,9 +131,15 @@ class TargetStats(BaseModel):
     emails: int
     domains: int
 
+class TimelineEvent(BaseModel):
+    type: str
+    title: str
+    timestamp: str
+
 class SystemStatsResponse(BaseModel):
     targets: TargetStats
     leaks_count: int
     alerts_count: int
     scans_count: int
+    timeline: List[TimelineEvent] = []
 

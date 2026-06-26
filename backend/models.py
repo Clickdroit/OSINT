@@ -9,6 +9,7 @@ class Target(Base):
     id = Column(Integer, primary_key=True, index=True)
     value = Column(String, nullable=False, index=True)
     type = Column(String, nullable=False, index=True)  # "username", "email", "domain"
+    notes = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     scan_results = relationship("ScanResult", back_populates="target", cascade="all, delete-orphan")

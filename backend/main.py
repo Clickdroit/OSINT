@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends, HTTPException, Query, BackgroundTasks
+from fastapi import FastAPI, Depends, HTTPException, Query, BackgroundTasks, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
@@ -7,13 +7,15 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select, or_, text, func
 from typing import List, Optional
 import os
-
+import csv
+import io
 import json
+
 from backend.config import settings
 from backend.database import get_db, init_db
 from backend.models import Target, ScanResult, Leak, Keyword, Alert, Feed
 from backend.schemas import (
-    TargetCreate, TargetResponse, ScanResultResponse,
+    TargetCreate, TargetResponse, TargetUpdateNotes, ScanResultResponse,
     TaskStatusResponse, LeakResponse, KeywordCreate,
     KeywordResponse, AlertResponse, AIChatRequest, AIChatResponse,
     RemediationRequest, RemediationResponse,
@@ -87,6 +89,76 @@ def delete_target(target_id: int, db: Session = Depends(get_db)):
     db.delete(target)
     db.commit()
     return None
+
+@app.patch("/api/v1/targets/{target_id}/notes", response_model=TargetResponse)
+def update_target_notes(target_id: int, notes_in: TargetUpdateNotes, db: Session = Depends(get_db)):
+    target = db.get(Target, target_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Target not found")
+    target.notes = notes_in.notes
+    db.commit()
+    db.refresh(target)
+    return target
+
+@app.post("/api/v1/targets/import-csv", status_code=201)
+async def import_targets_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    content = await file.read()
+    text_content = content.decode("utf-8")
+    csv_file = io.StringIO(text_content)
+    
+    reader = csv.reader(csv_file)
+    rows = list(reader)
+    if not rows:
+        raise HTTPException(status_code=400, detail="Le fichier CSV est vide.")
+        
+    created_count = 0
+    errors = []
+    
+    # Try parsing as header-based first.
+    has_header = False
+    header = [col.strip().lower() for col in rows[0]]
+    if "value" in header and "type" in header:
+        has_header = True
+        value_idx = header.index("value")
+        type_idx = header.index("type")
+        notes_idx = header.index("notes") if "notes" in header else None
+    else:
+        # Fallback to column index ordering
+        value_idx = 0
+        type_idx = 1
+        notes_idx = 2
+        
+    start_row = 1 if has_header else 0
+    
+    for i in range(start_row, len(rows)):
+        row = rows[i]
+        if not row or len(row) <= max(value_idx, type_idx):
+            continue
+        val = row[value_idx].strip()
+        typ = row[type_idx].strip().lower()
+        notes_val = row[notes_idx].strip() if notes_idx is not None and len(row) > notes_idx else None
+        
+        if not val or not typ:
+            continue
+            
+        if typ not in ["username", "email", "domain"]:
+            errors.append(f"Ligne {i+1}: Type '{typ}' invalide. Doit être 'username', 'email' ou 'domain'.")
+            continue
+            
+        # Check if duplicate
+        existing = db.scalar(select(Target).where(Target.value == val, Target.type == typ))
+        if existing:
+            continue
+            
+        target = Target(value=val, type=typ, notes=notes_val)
+        db.add(target)
+        created_count += 1
+        
+    if created_count > 0:
+        db.commit()
+        
+    return {"created": created_count, "errors": errors}
+
 
 
 # --- OSINT USERNAME SCAN ENDPOINTS ---
@@ -345,6 +417,44 @@ def get_system_stats(db: Session = Depends(get_db)):
     alerts = db.scalar(select(func.count(Alert.id)))
     scans = db.scalar(select(func.count(ScanResult.id)))
     
+    # Get recent timeline items
+    recent_targets = db.scalars(
+        select(Target).order_by(Target.created_at.desc()).limit(5)
+    ).all()
+    recent_alerts = db.scalars(
+        select(Alert).order_by(Alert.found_at.desc()).limit(5)
+    ).all()
+    recent_found = db.scalars(
+        select(ScanResult)
+        .where(ScanResult.status == "FOUND", ScanResult.platform != "Rapport OSINT IA")
+        .order_by(ScanResult.checked_at.desc())
+        .limit(5)
+    ).all()
+
+    timeline = []
+    for t in recent_targets:
+        timeline.append({
+            "type": "target",
+            "title": f"Cible ajoutée : {t.value} ({t.type})",
+            "timestamp": t.created_at.isoformat()
+        })
+    for a in recent_alerts:
+        timeline.append({
+            "type": "alert",
+            "title": f"Alerte RSS : {a.title}",
+            "timestamp": a.found_at.isoformat()
+        })
+    for r in recent_found:
+        timeline.append({
+            "type": "scan",
+            "title": f"Profil trouvé sur {r.platform} (Cible ID {r.target_id})",
+            "timestamp": r.checked_at.isoformat()
+        })
+
+    # Sort descending by timestamp
+    timeline.sort(key=lambda x: x["timestamp"], reverse=True)
+    timeline = timeline[:10]
+    
     return {
         "targets": {
             "total": total_targets or 0,
@@ -354,7 +464,8 @@ def get_system_stats(db: Session = Depends(get_db)):
         },
         "leaks_count": leaks or 0,
         "alerts_count": alerts or 0,
-        "scans_count": scans or 0
+        "scans_count": scans or 0,
+        "timeline": timeline
     }
 
 

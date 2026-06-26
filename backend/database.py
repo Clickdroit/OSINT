@@ -36,5 +36,12 @@ def init_db():
     except Exception as e:
         print(f"[DB init] details column check/add skipped: {str(e)}")
         
+    # Try to add notes column to targets if not exists
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE targets ADD COLUMN IF NOT EXISTS notes TEXT;"))
+    except Exception as e:
+        print(f"[DB init] notes column check/add skipped: {str(e)}")
+        
     # 3. Create all tables
     Base.metadata.create_all(bind=engine)

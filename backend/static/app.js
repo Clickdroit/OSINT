@@ -72,6 +72,53 @@ function initTargets() {
         }
     });
 
+    // Bulk CSV import handler
+    const bulkImportForm = document.getElementById("bulk-import-form");
+    const importResults = document.getElementById("import-results");
+    if (bulkImportForm) {
+        bulkImportForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const csvFileInput = document.getElementById("csv-file");
+            if (!csvFileInput.files || csvFileInput.files.length === 0) return;
+
+            const formData = new FormData();
+            formData.append("file", csvFileInput.files[0]);
+
+            try {
+                importResults.style.display = "block";
+                importResults.innerHTML = `<span class="text-muted">Importation en cours...</span>`;
+                const response = await fetch(`${API_BASE}/api/v1/targets/import-csv`, {
+                    method: "POST",
+                    body: formData
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    let html = `<span class="text-success" style="font-weight:600;">Importation réussie : ${data.created} cible(s) ajoutée(s).</span>`;
+                    if (data.errors && data.errors.length > 0) {
+                        html += `<ul style="color:var(--color-error); margin-top:5px; padding-left:15px;">`;
+                        data.errors.slice(0, 5).forEach(err => {
+                            html += `<li>${err}</li>`;
+                        });
+                        if (data.errors.length > 5) {
+                            html += `<li>... et ${data.errors.length - 5} autres erreurs</li>`;
+                        }
+                        html += `</ul>`;
+                    }
+                    importResults.innerHTML = html;
+                    bulkImportForm.reset();
+                    fetchTargets();
+                } else {
+                    const err = await response.json();
+                    importResults.innerHTML = `<span class="text-error">Erreur: ${err.detail || "Échec de l'importation."}</span>`;
+                }
+            } catch (error) {
+                console.error("CSV import error:", error);
+                importResults.innerHTML = `<span class="text-error">Erreur de connexion lors de l'importation.</span>`;
+            }
+        });
+    }
+
     // Trigger username scan
     startScanBtn.addEventListener("click", () => {
         if (activeTargetId) {
@@ -102,7 +149,7 @@ async function fetchTargets() {
         const targets = await response.json();
         
         if (targets.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="4" class="text-center text-muted">Aucune cible enregistrée.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="5" class="text-center text-muted">Aucune cible enregistrée.</td></tr>`;
             return;
         }
 
@@ -118,10 +165,18 @@ async function fetchTargets() {
             // Formulate date
             const dateStr = new Date(t.created_at).toLocaleString("fr-FR");
 
+            // Formulate notes cell
+            const notesStr = t.notes || "";
+            const notesSnippet = notesStr.length > 25 ? notesStr.substring(0, 22) + "..." : notesStr;
+            const notesCellContent = notesStr 
+                ? `<span class="target-notes-text" title="${notesStr}">${notesSnippet}</span> <button class="btn btn-secondary btn-xs edit-notes-btn" data-id="${t.id}" data-notes="${notesStr.replace(/"/g, '&quot;')}" style="padding: 2px 5px; font-size: 0.65rem;">✏️</button>` 
+                : `<button class="btn btn-secondary btn-xs edit-notes-btn" data-id="${t.id}" data-notes="" style="padding: 2px 5px; font-size: 0.65rem;">+ Note</button>`;
+
             tr.innerHTML = `
                 <td><strong>${t.value}</strong></td>
                 <td><span class="${badgeClass}">${typeLabel}</span></td>
                 <td>${dateStr}</td>
+                <td>${notesCellContent}</td>
                 <td>
                     ${(t.type === 'username' || t.type === 'domain' || t.type === 'email') ? `<button class="btn btn-primary btn-sm inspect-btn" data-id="${t.id}" data-val="${t.value}" data-type="${t.type}">Analyser</button>` : ''}
                     <button class="btn btn-danger btn-sm delete-target-btn" data-id="${t.id}">Supprimer</button>
@@ -131,7 +186,7 @@ async function fetchTargets() {
             // Click row to inspect target
             if (t.type === "username" || t.type === "domain" || t.type === "email") {
                 tr.addEventListener("click", (e) => {
-                    if (e.target.classList.contains("delete-target-btn")) return;
+                    if (e.target.classList.contains("delete-target-btn") || e.target.classList.contains("edit-notes-btn")) return;
                     showScanPanel(t.id, t.value, t.type);
                 });
             } else {
@@ -151,12 +206,39 @@ async function fetchTargets() {
                 });
             }
 
+            // Edit notes binding
+            const editNotesBtn = tr.querySelector(".edit-notes-btn");
+            if (editNotesBtn) {
+                editNotesBtn.addEventListener("click", async (e) => {
+                    e.stopPropagation();
+                    const targetId = editNotesBtn.dataset.id;
+                    const currentNotes = editNotesBtn.dataset.notes;
+                    const newNotes = prompt(`Modifier les notes pour cette cible :`, currentNotes);
+                    if (newNotes === null) return;
+
+                    try {
+                        const res = await fetch(`${API_BASE}/api/v1/targets/${targetId}/notes`, {
+                            method: "PATCH",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ notes: newNotes.trim() })
+                        });
+                        if (res.ok) {
+                            fetchTargets();
+                        } else {
+                            alert("Impossible de sauvegarder la note.");
+                        }
+                    } catch (err) {
+                        console.error("Notes update error:", err);
+                    }
+                });
+            }
+
             tbody.appendChild(tr);
         });
 
     } catch (error) {
         console.error("Error listing targets:", error);
-        tbody.innerHTML = `<tr><td colspan="4" class="text-center text-error">Erreur lors de la récupération des cibles.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="5" class="text-center text-error">Erreur lors de la récupération des cibles.</td></tr>`;
     }
 }
 
@@ -261,6 +343,38 @@ const CATEGORY_ORDER = ["social", "dev", "gaming", "creative", "music", "financi
 let allScanResults = []; // Store full results for filtering
 let activeFilter = "all";
 
+function parseDetails(details) {
+    if (!details) return { category: "other", metadata: {} };
+    try {
+        if (details.trim().startsWith("{") && details.trim().endsWith("}")) {
+            return JSON.parse(details);
+        }
+    } catch (e) {
+        // Fall back
+    }
+    return { category: details, metadata: {} };
+}
+
+function parseAIReport(reportText) {
+    if (!reportText) return null;
+    let score = null;
+    const scoreMatch = reportText.match(/\*\*SCORE DE CONFIANCE IA\s*:\s*(\d+)%\*\*/i);
+    if (scoreMatch) {
+        score = parseInt(scoreMatch[1], 10);
+    }
+    
+    let identity = null;
+    const jsonMatch = reportText.match(/```json\s*([\s\S]*?)\s*```/i);
+    if (jsonMatch) {
+        try {
+            identity = JSON.parse(jsonMatch[1].trim());
+        } catch (e) {
+            console.error("Failed to parse identity JSON from AI report:", e);
+        }
+    }
+    return { score, identity };
+}
+
 function renderResultsGrid(results, filterStatus = "all") {
     allScanResults = results;
     const grid = document.getElementById("scan-results-grid");
@@ -275,11 +389,69 @@ function renderResultsGrid(results, filterStatus = "all") {
     // Apply status filter
     const filtered = filterStatus === "all" ? normalResults : normalResults.filter(r => r.status === filterStatus);
 
+    // Identity Card Rendering
+    const identityContainer = document.getElementById("identity-card-container");
+    if (identityContainer) {
+        identityContainer.style.display = "none";
+        identityContainer.innerHTML = "";
+    }
+
     if (activeTargetType === "username") {
-        // Group by category (stored in details field)
+        const osintAiReport = aiReports.find(r => r.platform === "Rapport OSINT IA");
+        if (osintAiReport) {
+            const parsedReport = parseAIReport(osintAiReport.details);
+            if (parsedReport && (parsedReport.score !== null || parsedReport.identity)) {
+                identityContainer.style.display = "block";
+                const score = parsedReport.score !== null ? parsedReport.score : 0;
+                const identity = parsedReport.identity || {};
+                const name = identity.nom_probable || "Inconnu";
+                const location = identity.localisation_probable || "Non spécifiée";
+                const bio = identity.bio_synthétisée || "Aucune description synthétisée disponible.";
+                const interests = identity.centres_interets || [];
+                const avatar = identity.photo_profil_probable || "";
+
+                const interestsHtml = interests.map(i => `<span class="badge badge-username">${i}</span>`).join(" ");
+                const gaugeColor = score >= 75 ? "#00ff88" : score >= 40 ? "#ffaa00" : "#ff3333";
+
+                // We extract the original target value being scanned
+                const scannedUsername = document.getElementById("scan-target-name").innerText.replace("Cible: ", "").trim();
+
+                identityContainer.innerHTML = `
+                    <div class="card card-glow identity-card" style="display: flex; gap: 20px; align-items: flex-start; padding: 20px; border: 1px solid var(--accent-glow);">
+                        <div class="identity-avatar-container" style="flex-shrink: 0; width: 80px; height: 80px; border-radius: 50%; overflow: hidden; border: 2px solid var(--accent); background: rgba(255,255,255,0.05); display: flex; align-items: center; justify-content: center;">
+                            <img src="${avatar}" alt="Avatar" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.src='https://api.dicebear.com/7.x/identicon/svg?seed=${scannedUsername}';">
+                        </div>
+                        <div class="identity-info-container" style="flex-grow: 1;">
+                            <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 15px; width:100%;">
+                                <div>
+                                    <h3 style="margin: 0; font-size: 1.25rem; color: var(--accent);">${name}</h3>
+                                    <div style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 4px;">📍 ${location}</div>
+                                </div>
+                                <div class="identity-gauge-container" style="text-align: right; min-width: 150px;">
+                                    <div style="font-size: 0.7rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase;">Confiance Identité</div>
+                                    <div style="display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 5px;">
+                                        <div style="width: 80px; height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden;">
+                                            <div style="width: ${score}%; height: 100%; background: ${gaugeColor}; border-radius: 3px;"></div>
+                                        </div>
+                                        <span style="font-size: 1rem; font-weight: bold; color: ${gaugeColor};">${score}%</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <p style="margin-top: 10px; font-size: 0.85rem; line-height: 1.5; color: var(--text-secondary);">${bio}</p>
+                            ${interests.length > 0 ? `<div style="margin-top: 10px; display:flex; flex-wrap:wrap; gap:5px; align-items:center;"><span style="font-size: 0.75rem; color: var(--text-secondary); margin-right:5px;">Intérêts:</span>${interestsHtml}</div>` : ''}
+                        </div>
+                    </div>
+                `;
+            }
+        }
+    }
+
+    if (activeTargetType === "username") {
+        // Group by category
         const groups = {};
         filtered.forEach(res => {
-            const cat = res.details || "other";
+            const parsed = parseDetails(res.details);
+            const cat = parsed.category || "other";
             if (!groups[cat]) groups[cat] = [];
             groups[cat].push(res);
         });
@@ -315,6 +487,14 @@ function renderResultsGrid(results, filterStatus = "all") {
         reportCard.style.gridColumn = "1 / -1";
         reportCard.style.border = "1px solid var(--accent-glow)";
         const badge = res.platform === "Rapport OSINT IA" ? "Analyse OSINT IA" : "Analyse IA";
+        
+        // Clean out JSON code block from rendering in standard markdown to keep UI clean
+        let cleanDetails = res.details;
+        const jsonBlockRegex = /```json\s*[\s\S]*?\s*```/i;
+        cleanDetails = cleanDetails.replace(jsonBlockRegex, "").trim();
+        // Also remove score line from main markdown body if it starts with it
+        cleanDetails = cleanDetails.replace(/^\*\*SCORE DE CONFIANCE IA\s*:\s*\d+%\*\*/i, "").trim();
+
         reportCard.innerHTML = `
             <div class="result-info" style="width: 100%;">
                 <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 10px; margin-bottom: 15px; width: 100%;">
@@ -322,7 +502,7 @@ function renderResultsGrid(results, filterStatus = "all") {
                     <span class="badge badge-domain">${badge}</span>
                 </div>
                 <div class="markdown-body" style="font-size: 0.95rem; color: var(--text-secondary); line-height: 1.6; text-align: justify; width: 100%;">
-                    ${formatAIResponseText(res.details)}
+                    ${formatAIResponseText(cleanDetails)}
                 </div>
             </div>
         `;
@@ -355,12 +535,55 @@ function buildResultCard(res) {
         actionHtml = `<span class="text-muted" style="font-size:0.75rem;">Non détecté</span>`;
     }
 
+    const parsed = parseDetails(res.details);
+    const meta = parsed.metadata || {};
+    
+    let metaHtml = "";
+    let avatarHtml = "";
+    
+    if (isFound && activeTargetType === "username") {
+        const avatarUrl = meta.avatar_url || meta.image;
+        if (avatarUrl) {
+            avatarHtml = `
+                <div class="result-avatar" style="flex-shrink: 0; width: 32px; height: 32px; border-radius: 4px; overflow: hidden; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.03); display: flex; align-items: center; justify-content: center; margin-right: 10px;">
+                    <img src="${avatarUrl}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.style.display='none';">
+                </div>
+            `;
+        }
+        
+        const displayName = meta.name || meta.title;
+        const displayBio = meta.bio || meta.description;
+        const displayLoc = meta.location;
+        const repos = meta.public_repos !== undefined ? `${meta.public_repos} repos` : "";
+        const karma = meta.total_karma !== undefined ? `${meta.total_karma} karma` : "";
+        const extraList = [displayLoc, repos, karma].filter(Boolean);
+        const extraText = extraList.length > 0 ? `📍 ${extraList.join(" | ")}` : "";
+
+        if (displayName || displayBio || extraText) {
+            metaHtml = `
+                <div class="result-meta-details" style="margin-top: 8px; font-size: 0.75rem; color: var(--text-secondary); border-top: 1px solid rgba(255,255,255,0.03); padding-top: 6px; display: flex; flex-direction: column; gap: 3px;">
+                    ${displayName ? `<div style="font-weight: 600; color: var(--accent);">${displayName}</div>` : ''}
+                    ${displayBio ? `<div style="font-style: italic; opacity: 0.85; line-height:1.3;">"${displayBio.length > 85 ? displayBio.substring(0, 82) + "..." : displayBio}"</div>` : ''}
+                    ${extraText ? `<div style="opacity: 0.7; font-size: 0.7rem;">${extraText}</div>` : ''}
+                </div>
+            `;
+        }
+    }
+
     card.innerHTML = `
-        <div class="result-info">
-            <span class="result-name">${res.platform}</span>
-            ${actionHtml}
+        <div style="display: flex; flex-direction: column; width: 100%;">
+            <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+                <div style="display: flex; align-items: center;">
+                    ${avatarHtml}
+                    <div class="result-info">
+                        <span class="result-name">${res.platform}</span>
+                        ${actionHtml}
+                    </div>
+                </div>
+                <span class="result-status-tag">${statusLabel}</span>
+            </div>
+            ${metaHtml}
         </div>
-        <span class="result-status-tag">${statusLabel}</span>
     `;
     return card;
 }
@@ -1088,13 +1311,63 @@ async function fetchDashboardStats() {
         
         const data = await response.json();
         
-        document.getElementById("dash-total-targets").innerText = data.targets.total;
-        document.getElementById("dash-targets-breakdown").innerText = 
-            `${data.targets.usernames} pseudos | ${data.targets.emails} emails | ${data.targets.domains} domaines`;
+        // Counter variables
+        const totalTargets = data.targets.total;
+        const totalLeaks = data.leaks_count;
+        const totalAlerts = data.alerts_count;
+        const totalScans = data.scans_count;
+        
+        const dashTotalTargetsEl = document.getElementById("dash-total-targets");
+        if (dashTotalTargetsEl) animateCounter(dashTotalTargetsEl, totalTargets);
+        
+        const dashBreakdownEl = document.getElementById("dash-targets-breakdown");
+        if (dashBreakdownEl) {
+            dashBreakdownEl.innerText = `${data.targets.usernames} pseudos | ${data.targets.emails} emails | ${data.targets.domains} domaines`;
+        }
             
-        document.getElementById("dash-total-leaks").innerText = data.leaks_count.toLocaleString();
-        document.getElementById("dash-total-alerts").innerText = data.alerts_count;
-        document.getElementById("dash-total-scans").innerText = data.scans_count;
+        const dashTotalLeaksEl = document.getElementById("dash-total-leaks");
+        if (dashTotalLeaksEl) animateCounter(dashTotalLeaksEl, totalLeaks);
+        
+        const dashTotalAlertsEl = document.getElementById("dash-total-alerts");
+        if (dashTotalAlertsEl) animateCounter(dashTotalAlertsEl, totalAlerts);
+        
+        const dashTotalScansEl = document.getElementById("dash-total-scans");
+        if (dashTotalScansEl) animateCounter(dashTotalScansEl, totalScans);
+
+        // Populate Activity Timeline
+        const timelineContainer = document.getElementById("dash-timeline");
+        if (timelineContainer) {
+            const timeline = data.timeline || [];
+            if (timeline.length === 0) {
+                timelineContainer.innerHTML = `<div class="text-center text-muted pad-20">Aucune activité récente détectée.</div>`;
+            } else {
+                timelineContainer.innerHTML = "";
+                timeline.forEach(item => {
+                    const timeStr = new Date(item.timestamp).toLocaleString("fr-FR");
+                    let icon = "📝";
+                    if (item.type === "alert") icon = "🚨";
+                    if (item.type === "scan") icon = "🔍";
+
+                    const row = document.createElement("div");
+                    row.className = "timeline-item";
+                    row.style.display = "flex";
+                    row.style.justifyContent = "space-between";
+                    row.style.alignItems = "center";
+                    row.style.borderBottom = "1px solid rgba(255,255,255,0.03)";
+                    row.style.padding = "10px 0";
+                    row.style.fontSize = "0.85rem";
+                    
+                    row.innerHTML = `
+                        <div style="display:flex; gap:10px; align-items:center;">
+                            <span>${icon}</span>
+                            <span style="color:var(--text-secondary);">${item.title}</span>
+                        </div>
+                        <span style="font-size:0.75rem; color:var(--text-muted);">${timeStr}</span>
+                    `;
+                    timelineContainer.appendChild(row);
+                });
+            }
+        }
     } catch (error) {
         console.error("Dashboard stats error:", error);
     }

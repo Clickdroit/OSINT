@@ -1,6 +1,7 @@
 import asyncio
 import os
 import re
+import json
 import feedparser
 import httpx
 import hashlib
@@ -30,31 +31,122 @@ DEFAULT_HEADERS = {
 async def check_site(client: httpx.AsyncClient, site: dict, username: str, semaphore: asyncio.Semaphore) -> dict:
     url = site["url_template"].format(username)
     name = site["name"]
+    category = site.get("category", "other")
     async with semaphore:
         try:
-            # Most sites work fine with GET. We follow redirects.
+            # 1. Special API fetches for found profiles to extract rich metadata
+            if name == "GitHub":
+                try:
+                    github_url = f"https://api.github.com/users/{username}"
+                    api_resp = await client.get(github_url, headers=DEFAULT_HEADERS, timeout=3.0)
+                    if api_resp.status_code == 200:
+                        api_data = api_resp.json()
+                        return {
+                            "platform": name,
+                            "url": url,
+                            "status": "FOUND",
+                            "response_code": 200,
+                            "category": category,
+                            "metadata": {
+                                "name": api_data.get("name"),
+                                "bio": api_data.get("bio"),
+                                "location": api_data.get("location"),
+                                "company": api_data.get("company"),
+                                "blog": api_data.get("blog"),
+                                "avatar_url": api_data.get("avatar_url"),
+                                "public_repos": api_data.get("public_repos")
+                            }
+                        }
+                    elif api_resp.status_code == 404:
+                        return {"platform": name, "url": url, "status": "NOT_FOUND", "response_code": 404, "category": category}
+                except Exception as api_err:
+                    print(f"[GitHub API Error] {api_err}")
+
+            elif name == "Reddit":
+                try:
+                    reddit_api_url = f"https://www.reddit.com/user/{username}/about.json"
+                    api_resp = await client.get(reddit_api_url, headers=DEFAULT_HEADERS, timeout=3.0)
+                    if api_resp.status_code == 200:
+                        api_data = api_resp.json().get("data", {})
+                        created_utc = api_data.get("created_utc")
+                        created_str = datetime.utcfromtimestamp(created_utc).strftime('%Y-%m-%d') if created_utc else None
+                        avatar_url = api_data.get("subreddit", {}).get("icon_img") if api_data.get("subreddit") else None
+                        if avatar_url and "?" in avatar_url:
+                            avatar_url = avatar_url.split("?")[0]
+                        return {
+                            "platform": name,
+                            "url": url,
+                            "status": "FOUND",
+                            "response_code": 200,
+                            "category": category,
+                            "metadata": {
+                                "name": api_data.get("name"),
+                                "created_at": created_str,
+                                "total_karma": api_data.get("total_karma"),
+                                "bio": api_data.get("subreddit", {}).get("public_description") if api_data.get("subreddit") else None,
+                                "avatar_url": avatar_url
+                            }
+                        }
+                    elif api_resp.status_code == 404:
+                        return {"platform": name, "url": url, "status": "NOT_FOUND", "response_code": 404, "category": category}
+                except Exception as api_err:
+                    print(f"[Reddit API Error] {api_err}")
+
+            # 2. General site check
             response = await client.get(url, headers=DEFAULT_HEADERS, timeout=5.0, follow_redirects=True)
             status_code = response.status_code
             html_content = response.text
 
             # Check status codes indicative of missing profiles
             if status_code in site.get("error_codes", [404]):
-                return {"platform": name, "url": url, "status": "NOT_FOUND", "response_code": status_code}
+                return {"platform": name, "url": url, "status": "NOT_FOUND", "response_code": status_code, "category": category}
 
             # Check content-based signatures (avoid false positive 200 OKs)
             body_lower = html_content.lower()
             for keyword in site.get("error_keywords", []):
                 if keyword.lower() in body_lower:
-                    return {"platform": name, "url": url, "status": "NOT_FOUND", "response_code": status_code}
+                    return {"platform": name, "url": url, "status": "NOT_FOUND", "response_code": status_code, "category": category}
 
-            # If no negative signature matches, target profile exists
-            return {"platform": name, "url": url, "status": "FOUND", "response_code": status_code}
+            # If no negative signature matches, target profile exists. Parse OG metadata.
+            metadata = {}
+            try:
+                # Find og:title
+                og_title = re.search(r'<meta[^>]*?property=["\']og:title["\']?[^>]*?content=["\'](.*?)["\']', html_content, re.IGNORECASE)
+                if not og_title:
+                    og_title = re.search(r'<meta[^>]*?content=["\'](.*?)["\']?[^>]*?property=["\']og:title["\']', html_content, re.IGNORECASE)
+                
+                # Find og:description
+                og_desc = re.search(r'<meta[^>]*?property=["\']og:description["\']?[^>]*?content=["\'](.*?)["\']', html_content, re.IGNORECASE)
+                if not og_desc:
+                    og_desc = re.search(r'<meta[^>]*?content=["\'](.*?)["\']?[^>]*?property=["\']og:description["\']', html_content, re.IGNORECASE)
 
-        except httpx.HTTPError as e:
-            # Network failures or rate limiting
-            return {"platform": name, "url": url, "status": "ERROR", "response_code": None}
+                # Find og:image
+                og_image = re.search(r'<meta[^>]*?property=["\']og:image["\']?[^>]*?content=["\'](.*?)["\']', html_content, re.IGNORECASE)
+                if not og_image:
+                    og_image = re.search(r'<meta[^>]*?content=["\'](.*?)["\']?[^>]*?property=["\']og:image["\']', html_content, re.IGNORECASE)
+
+                if og_title:
+                    metadata["title"] = og_title.group(1).strip()
+                if og_desc:
+                    metadata["description"] = og_desc.group(1).strip()
+                if og_image:
+                    metadata["image"] = og_image.group(1).strip()
+            except Exception as og_err:
+                print(f"[OG Metadata Extraction Error] {og_err}")
+
+            return {
+                "platform": name,
+                "url": url,
+                "status": "FOUND",
+                "response_code": status_code,
+                "category": category,
+                "metadata": metadata
+            }
+
+        except httpx.HTTPError:
+            return {"platform": name, "url": url, "status": "ERROR", "response_code": None, "category": category}
         except Exception:
-            return {"platform": name, "url": url, "status": "ERROR", "response_code": None}
+            return {"platform": name, "url": url, "status": "ERROR", "response_code": None, "category": category}
 
 
 def generate_ai_username_report(username: str, results: list) -> str:
@@ -63,11 +155,11 @@ def generate_ai_username_report(username: str, results: list) -> str:
     not_found_count = sum(1 for r in results if r["status"] == "NOT_FOUND")
     error_count = sum(1 for r in results if r["status"] == "ERROR")
 
-    # Group found platforms by category (category is passed inside the result dict)
+    # Group found platforms by category
     from workers.site_signatures import SITES
     site_cat_map = {s["name"]: s.get("category", "other") for s in SITES}
 
-    categories: dict = {}
+    categories = {}
     for r in found:
         cat = site_cat_map.get(r["platform"], "other")
         categories.setdefault(cat, []).append(r["platform"])
@@ -78,10 +170,38 @@ def generate_ai_username_report(username: str, results: list) -> str:
         "music": "Musique & Vidéo", "financial": "Finance & Support",
         "security": "Cybersécurité & CTF", "other": "Autres Plateformes"
     }
+    
     platforms_by_cat = "\n".join(
         f"- **{cat_labels.get(cat, cat)}** : {', '.join(platforms)}"
         for cat, platforms in sorted(categories.items())
     ) or "Aucune plateforme détectée."
+
+    # Build a details string of metadata retrieved
+    found_profiles_info = []
+    for r in found:
+        meta = r.get("metadata", {})
+        info = f"- **{r['platform']}** : {r['url']}"
+        meta_parts = []
+        if meta:
+            if meta.get("name"):
+                meta_parts.append(f"Nom: {meta['name']}")
+            if meta.get("location"):
+                meta_parts.append(f"Localisation: {meta['location']}")
+            if meta.get("bio"):
+                meta_parts.append(f"Bio: {meta['bio']}")
+            elif meta.get("description"):
+                meta_parts.append(f"Description: {meta['description']}")
+            if meta.get("company"):
+                meta_parts.append(f"Entreprise: {meta['company']}")
+            if meta.get("total_karma"):
+                meta_parts.append(f"Karma: {meta['total_karma']}")
+            if meta.get("created_at"):
+                meta_parts.append(f"Créé le: {meta['created_at']}")
+        if meta_parts:
+            info += f" ({', '.join(meta_parts)})"
+        found_profiles_info.append(info)
+    
+    platforms_details = "\n".join(found_profiles_info) or "Aucun profil trouvé."
 
     exposure_level = (
         "🔴 **ÉLEVÉE**" if len(found) > 20 else
@@ -97,18 +217,26 @@ def generate_ai_username_report(username: str, results: list) -> str:
     )
 
     prompt = (
-        f"Génère un rapport d'analyse OSINT au format Markdown pour le pseudo : **{username}**\n\n"
-        f"Données de scan ({len(results)} plateformes analysées) :\n"
-        f"- Profils trouvés : {len(found)}/{len(results)}\n"
-        f"- Non trouvés : {not_found_count}\n"
-        f"- Erreurs réseau : {error_count}\n\n"
-        f"Plateformes détectées par catégorie :\n{platforms_by_cat}\n\n"
-        f"Niveau d'exposition estimé : {exposure_level}\n\n"
-        f"Structure du rapport (3 sections) :\n"
-        f"**1. Synthèse d'Exposition** : évalue le niveau d'exposition global de cette identité numérique.\n"
-        f"**2. Analyse des Risques** : identifie les plateformes ou catégories les plus sensibles du point de vue OPSEC/vie privée.\n"
-        f"**3. Recommandations** : conseille sur comment réduire la surface d'attaque et protéger cette identité (suppression de profils, pseudonymisation, paramètres de confidentialité).\n"
-        f"Ne mets pas d'introduction générique. Démarre directement avec le rapport Markdown."
+        f"Analyse le pseudo : **{username}** à partir des profils trouvés sur le web.\n\n"
+        f"Données de scan ({len(results)} plateformes analysées, {len(found)} trouvées) :\n"
+        f"{platforms_details}\n\n"
+        f"Calcule un **SCORE DE CONFIANCE** global (en pourcentage, ex: 85%) indiquant la probabilité que "
+        f"ces différents profils appartiennent réellement à la même personne physique. Base ton calcul sur "
+        f"la cohérence des noms réels, des bios, de la localisation, des styles d'écriture et de l'activité.\n\n"
+        f"Instructions pour le rapport Markdown :\n"
+        f"1. Commence obligatoirement ton rapport par une ligne au format exact suivant :\n"
+        f"   `**SCORE DE CONFIANCE IA : [Score]%**` (remplace [Score] par la valeur numérique uniquement, ex: `**SCORE DE CONFIANCE IA : 85%**`)\n"
+        f"2. Ajoute une section **Fiche d'identité synthétisée** au format JSON (bloc de code ```json) contenant les clés suivantes :\n"
+        f"   - `nom_probable` (String)\n"
+        f"   - `localisation_probable` (String)\n"
+        f"   - `photo_profil_probable` (String - URL d'avatar trouvée si présente, sinon null)\n"
+        f"   - `bio_synthétisée` (String)\n"
+        f"   - `centres_interets` (Array of Strings)\n"
+        f"3. Ajoute ensuite des sections d'analyse textuelle :\n"
+        f"   - **Synthèse d'Exposition** : évaluation globale (Niveau : {exposure_level}).\n"
+        f"   - **Analyse des Risques et Cohérence** : pourquoi ce score ? (ex: correspondances de noms/bios entre GitHub et Reddit, ou au contraire doutes).\n"
+        f"   - **Recommandations OPSEC**.\n\n"
+        f"Ne mets aucune introduction ou conclusion inutile. Débute directement par la ligne du score."
     )
 
     response_text = ""
@@ -158,6 +286,16 @@ def generate_ai_username_report(username: str, results: list) -> str:
     if not response_text:
         # Static fallback
         response_text = (
+            f"**SCORE DE CONFIANCE IA : 0%**\n\n"
+            f"```json\n"
+            f"{{\n"
+            f"  \"nom_probable\": \"Non disponible\",\n"
+            f"  \"localisation_probable\": \"Non disponible\",\n"
+            f"  \"photo_profil_probable\": null,\n"
+            f"  \"bio_synthétisée\": \"L'analyse IA n'a pas pu être générée car les clés d'API ne sont pas configurées.\",\n"
+            f"  \"centres_interets\": []\n"
+            f"}}\n"
+            f"```\n\n"
             f"## Rapport OSINT - {username}\n\n"
             f"**Niveau d'exposition** : {exposure_level}\n\n"
             f"**Profils détectés ({len(found)}/{len(results)})** :\n{platforms_by_cat}\n\n"
@@ -187,16 +325,20 @@ async def run_username_scan(target_id: int):
             tasks = [check_site(client, site, username, sem) for site in SITES]
             results = await asyncio.gather(*tasks)
 
-        # Bulk insert scan results into the database (include category)
+        # Bulk insert scan results into the database (include category and metadata as JSON)
         db_results = []
         for res in results:
+            details_obj = {
+                "category": res.get("category", "other"),
+                "metadata": res.get("metadata", {})
+            }
             db_results.append({
                 "target_id": target_id,
                 "platform": res["platform"],
                 "url": res["url"] if res["status"] == "FOUND" else None,
                 "status": res["status"],
                 "response_code": res["response_code"],
-                "details": res.get("category", "other")
+                "details": json.dumps(details_obj)
             })
             
         if db_results:
@@ -232,6 +374,7 @@ def scan_username(target_id: int):
     # Run the asynchronous scan loop inside Celery's synchronous worker thread
     asyncio.run(run_username_scan(target_id))
     return {"status": "SUCCESS", "target_id": target_id}
+
 
 
 # --- TASK 2: BREACH & LEAK INGESTOR (STREAMING) ---

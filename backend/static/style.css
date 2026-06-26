@@ -1184,3 +1184,73 @@ textarea#remediation-code:focus {
     flex-wrap: wrap;
     gap: 0.75rem;
 }
+
+/* Identity Card (Fiche d'identité synthétisée) */
+.identity-card {
+    background: rgba(10, 10, 25, 0.6) !important;
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(0, 242, 254, 0.15) !important;
+    box-shadow: 0 4px 30px rgba(0, 0, 0, 0.4), inset 0 0 20px rgba(0, 242, 254, 0.05);
+    border-radius: 12px;
+}
+.identity-avatar-container {
+    box-shadow: 0 0 15px rgba(0, 242, 254, 0.3);
+}
+
+/* Timeline Activity log */
+.timeline-container {
+    padding: 0.5rem 1rem;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.04);
+}
+.timeline-item {
+    transition: background-color 0.2s ease;
+}
+.timeline-item:hover {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+/* Notes Field in Cibles list */
+.target-notes-text {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    opacity: 0.9;
+    max-width: 150px;
+    display: inline-block;
+    vertical-align: middle;
+}
+.edit-notes-btn {
+    opacity: 0.4;
+    transition: opacity 0.2s ease;
+}
+tr:hover .edit-notes-btn {
+    opacity: 1;
+}
+
+/* Bulk CSV import section formatting */
+#bulk-import-form input[type="file"] {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    padding: 0.5rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-family: inherit;
+    width: 100%;
+}
+#bulk-import-form input[type="file"]::file-selector-button {
+    background: rgba(0, 242, 254, 0.1);
+    color: var(--accent);
+    border: 1px solid rgba(0, 242, 254, 0.2);
+    border-radius: 6px;
+    padding: 0.3rem 0.7rem;
+    cursor: pointer;
+    margin-right: 10px;
+    font-weight: 600;
+    transition: all 0.2s ease;
+}
+#bulk-import-form input[type="file"]::file-selector-button:hover {
+    background: rgba(0, 242, 254, 0.2);
+    border-color: var(--accent);
+}
