@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Databases & local secrets
+.env
+*.db
+*.sqlite
+
+# Big leak logs / test data
+data/sample_leaks.txt
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
