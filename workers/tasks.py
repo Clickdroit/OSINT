@@ -256,7 +256,7 @@ def generate_ai_username_report(username: str, results: list) -> str:
                     {"role": "system", "content": system_instruction},
                     {"role": "user", "content": prompt}
                 ]},
-                timeout=60.0
+                timeout=25.0
             )
             if response.status_code != 200:
                 return None, f"HTTP {response.status_code}: {response.text}"
@@ -269,7 +269,7 @@ def generate_ai_username_report(username: str, results: list) -> str:
             return None, "Gemini API key not configured."
         try:
             model = genai.GenerativeModel(model_name="gemini-1.5-flash", system_instruction=system_instruction)
-            return model.generate_content(prompt).text, None
+            return model.generate_content(prompt, request_options={"timeout": 25.0}).text, None
         except Exception as e:
             return None, str(e)
 
@@ -702,7 +702,7 @@ def generate_ai_domain_report(domain: str, dns_txt: list, dns_mx: list, headers_
                         {"role": "user", "content": prompt}
                     ]
                 },
-                timeout=45.0
+                timeout=25.0
             )
             if response.status_code != 200:
                 return None, f"HTTP {response.status_code}: {response.text}"
@@ -719,7 +719,7 @@ def generate_ai_domain_report(domain: str, dns_txt: list, dns_mx: list, headers_
                 model_name="gemini-1.5-flash",
                 system_instruction=system_instruction
             )
-            response = model.generate_content(prompt)
+            response = model.generate_content(prompt, request_options={"timeout": 25.0})
             return response.text, None
         except Exception as e:
             return None, str(e)

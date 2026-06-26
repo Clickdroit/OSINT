@@ -518,7 +518,7 @@ async def chat_with_copilot(chat_in: AIChatRequest):
                         "model": settings.AI_MODEL_NAME,
                         "messages": messages
                     },
-                    timeout=45.0
+                    timeout=25.0
                 )
                 if response.status_code != 200:
                     return None, f"HTTP {response.status_code}: {response.text}"
@@ -542,7 +542,7 @@ async def chat_with_copilot(chat_in: AIChatRequest):
                     gemini_history.append({"role": role, "parts": [msg.content]})
 
             chat = model.start_chat(history=gemini_history)
-            response = chat.send_message(chat_in.message)
+            response = chat.send_message(chat_in.message, request_options={"timeout": 25.0})
             return response.text, None
         except Exception as e:
             return None, str(e)
@@ -654,7 +654,7 @@ async def remediate_code(req: RemediationRequest):
                             {"role": "user", "content": prompt}
                         ]
                     },
-                    timeout=45.0
+                    timeout=25.0
                 )
                 if response.status_code != 200:
                     return None, f"HTTP {response.status_code}: {response.text}"
@@ -671,7 +671,7 @@ async def remediate_code(req: RemediationRequest):
                 model_name="gemini-1.5-flash",
                 system_instruction=system_instruction
             )
-            response = model.generate_content(prompt)
+            response = model.generate_content(prompt, request_options={"timeout": 25.0})
             return response.text, None
         except Exception as e:
             return None, str(e)
