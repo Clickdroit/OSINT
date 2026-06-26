@@ -11,12 +11,13 @@ import os
 import json
 from backend.config import settings
 from backend.database import get_db, init_db
-from backend.models import Target, ScanResult, Leak, Keyword, Alert
+from backend.models import Target, ScanResult, Leak, Keyword, Alert, Feed
 from backend.schemas import (
     TargetCreate, TargetResponse, ScanResultResponse,
     TaskStatusResponse, LeakResponse, KeywordCreate,
     KeywordResponse, AlertResponse, AIChatRequest, AIChatResponse,
-    RemediationRequest, RemediationResponse
+    RemediationRequest, RemediationResponse,
+    FeedCreate, FeedResponse, FeedUpdate, SystemStatsResponse
 )
 from backend.celery_app import celery_app
 import google.generativeai as genai
@@ -41,9 +42,10 @@ app = FastAPI(
 )
 
 # Enable CORS for frontend integration
+origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -121,6 +123,22 @@ def trigger_domain_scan(target_id: int, db: Session = Depends(get_db)):
     task = celery_app.send_task("workers.tasks.scan_domain", args=[target_id])
     return {"task_id": task.id, "status": "PENDING"}
 
+@app.post("/api/v1/scans/email", response_model=TaskStatusResponse, status_code=202)
+def trigger_email_scan(target_id: int, db: Session = Depends(get_db)):
+    target = db.get(Target, target_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Target not found")
+    if target.type != "email":
+        raise HTTPException(status_code=400, detail="Target must be of type 'email' to run email scan")
+
+    # Clear previous results for this target to keep it clean
+    db.execute(text("DELETE FROM scan_results WHERE target_id = :tid").bindparams(tid=target_id))
+    db.commit()
+
+    # Trigger async Celery task
+    task = celery_app.send_task("workers.tasks.scan_email", args=[target_id])
+    return {"task_id": task.id, "status": "PENDING"}
+
 @app.get("/api/v1/scans/{task_id}", response_model=TaskStatusResponse)
 def get_scan_status(task_id: str):
     res = celery_app.AsyncResult(task_id)
@@ -149,8 +167,32 @@ def trigger_leak_ingest(
     source: str = Query(..., description="Name of the leak / breach (e.g. LinkedIn-2016)"),
     leak_date: Optional[str] = Query(None, description="Date of the breach (e.g. 2016-05-18)")
 ):
+    # Resolve absolute path and verify it is inside /app/data or local data dir (Path Traversal protection)
+    abs_path = os.path.abspath(file_path)
+    allowed_dirs = [
+        "/app/data",
+        os.path.abspath(os.path.join(os.getcwd(), "data"))
+    ]
+    
+    is_allowed = False
+    for allowed_dir in allowed_dirs:
+        try:
+            # Check if abs_path is a subpath of allowed_dir
+            if os.path.commonpath([abs_path, allowed_dir]) == allowed_dir:
+                is_allowed = True
+                break
+        except ValueError:
+            # Raised if paths are on different drives on Windows
+            continue
+            
+    if not is_allowed:
+        raise HTTPException(
+            status_code=400,
+            detail="Le chemin du fichier de fuites doit être situé dans le répertoire de données autorisé (/app/data/ ou ./data/)."
+        )
+
     # Trigger streaming ingestion in background worker
-    task = celery_app.send_task("workers.tasks.ingest_leak_file", args=[file_path, source, leak_date])
+    task = celery_app.send_task("workers.tasks.ingest_leak_file", args=[abs_path, source, leak_date])
     return {"task_id": task.id, "status": "PENDING"}
 
 @app.get("/api/v1/leaks/search", response_model=List[LeakResponse])
@@ -243,6 +285,77 @@ def list_alerts(db: Session = Depends(get_db)):
 def trigger_rss_check():
     task = celery_app.send_task("workers.tasks.check_rss_feeds")
     return {"task_id": task.id, "status": "PENDING"}
+
+
+# --- DYNAMIC RSS FEEDS CRUD ENDPOINTS ---
+
+@app.post("/api/v1/feeds", response_model=FeedResponse, status_code=201)
+def create_feed(feed_in: FeedCreate, db: Session = Depends(get_db)):
+    existing = db.scalar(select(Feed).where(Feed.url == feed_in.url.strip()))
+    if existing:
+        raise HTTPException(status_code=400, detail="Ce flux RSS est déjà configuré.")
+        
+    feed = Feed(name=feed_in.name.strip(), url=feed_in.url.strip())
+    db.add(feed)
+    db.commit()
+    db.refresh(feed)
+    return feed
+
+@app.get("/api/v1/feeds", response_model=List[FeedResponse])
+def list_feeds(db: Session = Depends(get_db)):
+    return db.scalars(select(Feed).order_by(Feed.created_at.desc())).all()
+
+@app.put("/api/v1/feeds/{feed_id}", response_model=FeedResponse)
+def update_feed(feed_id: int, feed_in: FeedUpdate, db: Session = Depends(get_db)):
+    feed = db.get(Feed, feed_id)
+    if not feed:
+        raise HTTPException(status_code=404, detail="Flux RSS introuvable")
+        
+    if feed_in.name is not None:
+        feed.name = feed_in.name.strip()
+    if feed_in.url is not None:
+        feed.url = feed_in.url.strip()
+    if feed_in.is_active is not None:
+        feed.is_active = feed_in.is_active
+        
+    db.commit()
+    db.refresh(feed)
+    return feed
+
+@app.delete("/api/v1/feeds/{feed_id}", status_code=204)
+def delete_feed(feed_id: int, db: Session = Depends(get_db)):
+    feed = db.get(Feed, feed_id)
+    if not feed:
+        raise HTTPException(status_code=404, detail="Flux RSS introuvable")
+    db.delete(feed)
+    db.commit()
+    return None
+
+
+# --- SYSTEM STATS / DASHBOARD ENDPOINT ---
+
+@app.get("/api/v1/stats", response_model=SystemStatsResponse)
+def get_system_stats(db: Session = Depends(get_db)):
+    total_targets = db.scalar(select(func.count(Target.id)))
+    usernames = db.scalar(select(func.count(Target.id)).where(Target.type == "username"))
+    emails = db.scalar(select(func.count(Target.id)).where(Target.type == "email"))
+    domains = db.scalar(select(func.count(Target.id)).where(Target.type == "domain"))
+    
+    leaks = db.scalar(select(func.count(Leak.id)))
+    alerts = db.scalar(select(func.count(Alert.id)))
+    scans = db.scalar(select(func.count(ScanResult.id)))
+    
+    return {
+        "targets": {
+            "total": total_targets or 0,
+            "usernames": usernames or 0,
+            "emails": emails or 0,
+            "domains": domains or 0
+        },
+        "leaks_count": leaks or 0,
+        "alerts_count": alerts or 0,
+        "scans_count": scans or 0
+    }
 
 
 # --- GEMINI AI COPILOT ENDPOINT ---

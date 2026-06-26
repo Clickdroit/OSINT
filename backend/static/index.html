@@ -30,7 +30,11 @@
     <main class="app-container">
         <!-- Navigation Tabs -->
         <nav class="tab-nav">
-            <button class="nav-btn active" data-tab="targets">
+            <button class="nav-btn active" data-tab="dashboard">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
+                Tableau de Bord
+            </button>
+            <button class="nav-btn" data-tab="targets">
                 <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v-2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm14 10v-2a4 4 0 0 0-3-3.87m-4-12a4 4 0 0 1 0 7.75"/></svg>
                 Cartographie de Pseudos
             </button>
@@ -52,8 +56,62 @@
             </button>
         </nav>
 
+        <!-- Dashboard Section -->
+        <section class="tab-content active" id="tab-dashboard">
+            <div class="stats-summary dashboard-counters">
+                <div class="stat-box card-glow">
+                    <span class="stat-number text-accent" id="dash-total-targets">0</span>
+                    <span class="stat-label">Cibles Enregistrées</span>
+                    <span class="dash-sub-stats" id="dash-targets-breakdown">0 pseudos | 0 emails | 0 domaines</span>
+                </div>
+                <div class="stat-box card-glow">
+                    <span class="stat-number text-success" id="dash-total-leaks">0</span>
+                    <span class="stat-label">Fuites Ingestées (Leaks)</span>
+                </div>
+                <div class="stat-box card-glow">
+                    <span class="stat-number text-error" id="dash-total-alerts">0</span>
+                    <span class="stat-label">Alertes Cyber Déclenchées</span>
+                </div>
+                <div class="stat-box card-glow">
+                    <span class="stat-number text-warning" id="dash-total-scans">0</span>
+                    <span class="stat-label">Analyses Sécurité Effectuées</span>
+                </div>
+            </div>
+
+            <div class="grid-two-cols margin-top">
+                <!-- Left Column: Quick Actions & Status -->
+                <div class="card">
+                    <h2>Résumé de l'Activité</h2>
+                    <p class="margin-top">Bienvenue dans votre console de renseignement privé. Ce tableau de bord agrège l'ensemble des données récoltées à travers la cartographie de pseudos, les bases de fuites de données et la veille continue des flux RSS.</p>
+                    <div class="quick-status-list margin-top" style="display: flex; flex-direction: column; gap: 10px;">
+                        <div class="status-item" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.03); padding-bottom: 8px;">
+                            <span class="status-label">Serveur API :</span>
+                            <span class="badge badge-username">FastAPI En ligne</span>
+                        </div>
+                        <div class="status-item" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.03); padding-bottom: 8px;">
+                            <span class="status-label">Broker Celery :</span>
+                            <span class="badge badge-domain">Redis Opérationnel</span>
+                        </div>
+                        <div class="status-item" style="display: flex; justify-content: space-between; align-items: center; padding-bottom: 8px;">
+                            <span class="status-label">Base de données :</span>
+                            <span class="badge badge-email">PostgreSQL Indexé (pg_trgm)</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Column: Recent Alerts logs -->
+                <div class="card">
+                    <h2>Dernières Alertes RSS</h2>
+                    <div class="alerts-feed compact-feed" id="dash-recent-alerts" style="max-height: 250px; overflow-y: auto;">
+                        <!-- Populated by JS -->
+                        <div class="text-center text-muted pad-20">Aucune alerte récente.</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
         <!-- Content Area -->
-        <section class="tab-content active" id="tab-targets">
+        <section class="tab-content" id="tab-targets">
             <div class="grid-two-cols">
                 <!-- Left column: Target formulation -->
                 <div class="card card-glow">
@@ -235,6 +293,43 @@
                 </div>
             </div>
 
+            <!-- Gestion des Flux RSS -->
+            <div class="card margin-top">
+                <h2>Gestion des Flux RSS de Veille</h2>
+                <div class="grid-two-cols margin-top">
+                    <div>
+                        <form id="feed-form">
+                            <div class="form-group">
+                                <label for="feed-name">Nom du Flux</label>
+                                <input type="text" id="feed-name" placeholder="ex: ZDNet Security" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="feed-url">URL du Flux RSS (XML)</label>
+                                <input type="text" id="feed-url" placeholder="https://exemple.com/rss" required>
+                            </div>
+                            <button type="submit" class="btn btn-primary">Ajouter le Flux</button>
+                        </form>
+                    </div>
+                    <div>
+                        <div class="table-container" style="max-height: 250px; overflow-y: auto;">
+                            <table id="feeds-table">
+                                <thead>
+                                    <tr>
+                                        <th>Flux</th>
+                                        <th>URL</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <!-- Populated by JS -->
+                                    <tr><td colspan="3" class="text-center text-muted">Chargement des flux...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Alerts logs -->
             <div class="card margin-top">
                 <h2>Alertes Cyber Déclenchées</h2>
@@ -242,7 +337,6 @@
                     <!-- Populated by JS -->
                     <div class="text-center text-muted pad-20">Aucune alerte n'a encore été détectée.</div>
                 </div>
-            </div>
             </div>
         </section>
 

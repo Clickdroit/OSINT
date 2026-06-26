@@ -99,3 +99,37 @@ class RemediationResponse(BaseModel):
     explanation: str = Field(..., description="Explanation of the vulnerability and how to fix it")
     fixed_code: str = Field(..., description="The corrected, secure version of the code snippet")
 
+
+# RSS Feed Schemas
+class FeedCreate(BaseModel):
+    name: str = Field(..., description="Nom du flux RSS (ex: BleepingComputer)")
+    url: str = Field(..., description="URL absolue du flux RSS XML")
+
+class FeedResponse(BaseModel):
+    id: int
+    name: str
+    url: str
+    is_active: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class FeedUpdate(BaseModel):
+    name: Optional[str] = None
+    url: Optional[str] = None
+    is_active: Optional[bool] = None
+
+# Stats Schema
+class TargetStats(BaseModel):
+    total: int
+    usernames: int
+    emails: int
+    domains: int
+
+class SystemStatsResponse(BaseModel):
+    targets: TargetStats
+    leaks_count: int
+    alerts_count: int
+    scans_count: int
+

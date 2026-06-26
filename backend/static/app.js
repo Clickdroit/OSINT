@@ -16,6 +16,8 @@ document.addEventListener("DOMContentLoaded", () => {
     initKeywordsAndAlerts();
     initAICopilot();
     initRemediator();
+    initDashboard();
+    initFeeds();
 });
 
 // --- TABS CONTROLLER ---
@@ -114,13 +116,13 @@ async function fetchTargets() {
                 <td><span class="${badgeClass}">${typeLabel}</span></td>
                 <td>${dateStr}</td>
                 <td>
-                    ${(t.type === 'username' || t.type === 'domain') ? `<button class="btn btn-primary btn-sm inspect-btn" data-id="${t.id}" data-val="${t.value}" data-type="${t.type}">Analyser</button>` : ''}
+                    ${(t.type === 'username' || t.type === 'domain' || t.type === 'email') ? `<button class="btn btn-primary btn-sm inspect-btn" data-id="${t.id}" data-val="${t.value}" data-type="${t.type}">Analyser</button>` : ''}
                     <button class="btn btn-danger btn-sm delete-target-btn" data-id="${t.id}">Supprimer</button>
                 </td>
             `;
 
             // Click row to inspect target
-            if (t.type === "username" || t.type === "domain") {
+            if (t.type === "username" || t.type === "domain" || t.type === "email") {
                 tr.addEventListener("click", (e) => {
                     if (e.target.classList.contains("delete-target-btn")) return;
                     showScanPanel(t.id, t.value, t.type);
@@ -174,8 +176,15 @@ function showScanPanel(targetId, targetValue, targetType) {
     
     document.getElementById("scan-results-card").style.display = "block";
     
-    const panelTitle = targetType === "domain" ? `Audit de Sécurité Domaine : ${targetValue}` : `Analyse d'Alias : ${targetValue}`;
-    const scanBtnLabel = targetType === "domain" ? `Lancer l'audit de sécurité` : `Lancer la recherche (100+ sites)`;
+    let panelTitle = `Analyse d'Alias : ${targetValue}`;
+    let scanBtnLabel = `Lancer la recherche (100+ sites)`;
+    if (targetType === "domain") {
+        panelTitle = `Audit de Sécurité Domaine : ${targetValue}`;
+        scanBtnLabel = `Lancer l'audit de sécurité`;
+    } else if (targetType === "email") {
+        panelTitle = `Audit de Sécurité Email : ${targetValue}`;
+        scanBtnLabel = `Lancer l'audit de l'adresse email`;
+    }
     
     document.getElementById("results-title").innerText = panelTitle;
     document.getElementById("scan-target-name").innerText = `Cible active : ${targetValue}`;
@@ -289,6 +298,17 @@ function displayStats(results) {
         document.getElementById("stat-found").innerText = secFound;
         document.getElementById("stat-notfound").innerText = secNotFound;
         document.getElementById("stat-error").innerText = secError;
+    } else if (activeTargetType === "email") {
+        if (labelFound) labelFound.innerText = "Fuites / Profils Détectés";
+        if (labelNotFound) labelNotFound.innerText = "Non détectés / Sécurisés";
+        
+        const found = results.filter(r => r.status === "FOUND").length;
+        const notfound = results.filter(r => r.status === "NOT_FOUND").length;
+        const error = results.filter(r => r.status === "ERROR").length;
+        
+        document.getElementById("stat-found").innerText = found;
+        document.getElementById("stat-notfound").innerText = notfound;
+        document.getElementById("stat-error").innerText = error;
     } else {
         if (labelFound) labelFound.innerText = "Profils trouvés";
         if (labelNotFound) labelNotFound.innerText = "Non trouvés";
@@ -316,9 +336,12 @@ async function triggerScan(targetId) {
     progressText.innerText = "Création de la tâche de scan...";
     
     try {
-        const scanUrl = activeTargetType === "domain"
-            ? `${API_BASE}/api/v1/scans/domain?target_id=${targetId}`
-            : `${API_BASE}/api/v1/scans/pseudo?target_id=${targetId}`;
+        let scanUrl = `${API_BASE}/api/v1/scans/pseudo?target_id=${targetId}`;
+        if (activeTargetType === "domain") {
+            scanUrl = `${API_BASE}/api/v1/scans/domain?target_id=${targetId}`;
+        } else if (activeTargetType === "email") {
+            scanUrl = `${API_BASE}/api/v1/scans/email?target_id=${targetId}`;
+        }
             
         const response = await fetch(scanUrl, { method: "POST" });
         if (!response.ok) throw new Error();
@@ -354,9 +377,12 @@ async function pollScanStatus(taskId, targetId) {
         const task = await response.json();
         
         if (task.status === "PENDING" || task.status === "STARTED") {
-            const statusTextMsg = activeTargetType === "domain"
-                ? "Audit du certificat SSL, des en-têtes HTTP et DNS en cours..."
-                : "Recherche en cours sur 100+ plateformes (5s env)...";
+            let statusTextMsg = "Recherche en cours sur 100+ plateformes (5s env)...";
+            if (activeTargetType === "domain") {
+                statusTextMsg = "Audit du certificat SSL, des en-têtes HTTP et DNS en cours...";
+            } else if (activeTargetType === "email") {
+                statusTextMsg = "Audit de l'adresse email (fuites locales, Gravatar, serveurs MX) en cours...";
+            }
             progressText.innerText = statusTextMsg;
             // Mock incremental progress while pending
             let currentWidth = parseFloat(progressFill.style.width) || 0;
@@ -497,13 +523,47 @@ async function searchLeaks() {
         tbody.innerHTML = "";
         results.forEach(l => {
             const tr = document.createElement("tr");
+            
+            const hashVal = l.password_hash || '';
+            let hashHtml = '-';
+            if (hashVal) {
+                hashHtml = `
+                    <span class="password-cell">
+                        <span class="password-masked">••••••••••••••••</span>
+                        <span class="password-raw" style="display:none;"><code style="font-family:var(--font-mono);font-size:0.8rem;">${hashVal}</code></span>
+                        <button class="btn btn-secondary btn-sm toggle-password-btn" style="padding: 2px 6px; font-size: 0.75rem;">Afficher</button>
+                    </span>
+                `;
+            }
+            
             tr.innerHTML = `
                 <td>${l.username || '<span class="text-muted">-</span>'}</td>
                 <td><strong>${l.email || '<span class="text-muted">-</span>'}</strong></td>
-                <td><code style="font-family:var(--font-mono);font-size:0.8rem;">${l.password_hash || '-'}</code></td>
+                <td>${hashHtml}</td>
                 <td><span class="badge badge-email">${l.source || 'Inconnue'}</span></td>
                 <td>${l.leak_date || 'N/A'}</td>
             `;
+            
+            if (hashVal) {
+                const toggleBtn = tr.querySelector(".toggle-password-btn");
+                const maskedSpan = tr.querySelector(".password-masked");
+                const rawSpan = tr.querySelector(".password-raw");
+                if (toggleBtn && maskedSpan && rawSpan) {
+                    toggleBtn.addEventListener("click", () => {
+                        const isHidden = rawSpan.style.display === "none";
+                        if (isHidden) {
+                            rawSpan.style.display = "inline-block";
+                            maskedSpan.style.display = "none";
+                            toggleBtn.innerText = "Masquer";
+                        } else {
+                            rawSpan.style.display = "none";
+                            maskedSpan.style.display = "inline-block";
+                            toggleBtn.innerText = "Afficher";
+                        }
+                    });
+                }
+            }
+            
             tbody.appendChild(tr);
         });
 
@@ -887,5 +947,162 @@ function initRemediator() {
             submitBtn.disabled = false;
         }
     });
+}
+
+
+// --- DASHBOARD CONTROLLER ---
+function initDashboard() {
+    fetchDashboardStats();
+    fetchDashboardAlerts();
+
+    // Refresh when clicking the dashboard tab
+    const dashBtn = document.querySelector('.nav-btn[data-tab="dashboard"]');
+    if (dashBtn) {
+        dashBtn.addEventListener("click", () => {
+            fetchDashboardStats();
+            fetchDashboardAlerts();
+        });
+    }
+}
+
+async function fetchDashboardStats() {
+    try {
+        const response = await fetch(`${API_BASE}/api/v1/stats`);
+        if (!response.ok) throw new Error("Impossible de récupérer les statistiques.");
+        
+        const data = await response.json();
+        
+        document.getElementById("dash-total-targets").innerText = data.targets.total;
+        document.getElementById("dash-targets-breakdown").innerText = 
+            `${data.targets.usernames} pseudos | ${data.targets.emails} emails | ${data.targets.domains} domaines`;
+            
+        document.getElementById("dash-total-leaks").innerText = data.leaks_count.toLocaleString();
+        document.getElementById("dash-total-alerts").innerText = data.alerts_count;
+        document.getElementById("dash-total-scans").innerText = data.scans_count;
+    } catch (error) {
+        console.error("Dashboard stats error:", error);
+    }
+}
+
+async function fetchDashboardAlerts() {
+    const container = document.getElementById("dash-recent-alerts");
+    if (!container) return;
+    try {
+        const response = await fetch(`${API_BASE}/api/v1/alerts`);
+        if (!response.ok) throw new Error();
+        
+        const alerts = await response.json();
+        
+        if (alerts.length === 0) {
+            container.innerHTML = `<div class="text-center text-muted pad-20">Aucune alerte récente détectée.</div>`;
+            return;
+        }
+
+        // Limit to 5 alerts for the dashboard
+        const recent = alerts.slice(0, 5);
+        container.innerHTML = "";
+        recent.forEach(a => {
+            const dateStr = new Date(a.found_at).toLocaleDateString("fr-FR");
+            const item = document.createElement("div");
+            item.className = "alert-item compact";
+            
+            const titleHtml = a.url 
+                ? `<a href="${a.url}" target="_blank">${a.title} &rarr;</a>` 
+                : a.title;
+                
+            item.innerHTML = `
+                <div class="alert-header" style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:5px;">
+                    <span class="alert-title" style="font-size:0.85rem; font-weight:600;">${titleHtml}</span>
+                    <span class="alert-keyword-match" style="font-size:0.65rem; padding: 1px 3px;">${a.keyword_value}</span>
+                </div>
+                <div class="alert-meta" style="font-size: 0.7rem; display:flex; gap:10px; color:var(--text-secondary);">
+                    <span>Source: <span class="alert-feed-name" style="color:var(--color-warning);">${a.source_feed}</span></span>
+                    <span>Date: ${dateStr}</span>
+                </div>
+            `;
+            container.appendChild(item);
+        });
+    } catch (error) {
+        container.innerHTML = `<div class="text-center text-error pad-20">Erreur lors de la récupération des alertes.</div>`;
+    }
+}
+
+// --- FEEDS CRUD CONTROLLER ---
+function initFeeds() {
+    const feedForm = document.getElementById("feed-form");
+    if (!feedForm) return;
+
+    fetchFeeds();
+
+    feedForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const name = document.getElementById("feed-name").value.trim();
+        const url = document.getElementById("feed-url").value.trim();
+
+        try {
+            const response = await fetch(`${API_BASE}/api/v1/feeds`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name, url })
+            });
+
+            if (response.ok) {
+                feedForm.reset();
+                fetchFeeds();
+            } else {
+                const err = await response.json();
+                alert(`Erreur: ${err.detail || "Impossible d'ajouter le flux RSS."}`);
+            }
+        } catch (error) {
+            console.error("Error creating feed:", error);
+        }
+    });
+}
+
+async function fetchFeeds() {
+    const tbody = document.querySelector("#feeds-table tbody");
+    if (!tbody) return;
+
+    try {
+        const response = await fetch(`${API_BASE}/api/v1/feeds`);
+        if (!response.ok) throw new Error();
+        
+        const feeds = await response.json();
+        
+        if (feeds.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="3" class="text-center text-muted">Aucun flux RSS configuré.</td></tr>`;
+            return;
+        }
+
+        tbody.innerHTML = "";
+        feeds.forEach(f => {
+            const tr = document.createElement("tr");
+            
+            tr.innerHTML = `
+                <td><strong>${f.name}</strong></td>
+                <td><span style="font-size:0.8rem; color:var(--text-secondary); word-break: break-all;">${f.url}</span></td>
+                <td>
+                    <button class="btn btn-danger btn-sm delete-feed-btn" data-id="${f.id}">Supprimer</button>
+                </td>
+            `;
+            
+            tr.querySelector(".delete-feed-btn").addEventListener("click", () => deleteFeed(f.id));
+            tbody.appendChild(tr);
+        });
+    } catch (error) {
+        tbody.innerHTML = `<tr><td colspan="3" class="text-center text-error">Erreur lors de la récupération des flux RSS.</td></tr>`;
+    }
+}
+
+async function deleteFeed(id) {
+    if (!confirm("Voulez-vous supprimer ce flux RSS ?")) return;
+    try {
+        const response = await fetch(`${API_BASE}/api/v1/feeds/${id}`, { method: "DELETE" });
+        if (response.ok) {
+            fetchFeeds();
+        }
+    } catch (error) {
+        console.error("Error deleting feed:", error);
+    }
 }
 

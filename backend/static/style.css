@@ -987,4 +987,77 @@ textarea#remediation-code:focus {
     letter-spacing: 0.5px;
 }
 
+/* Dashboard & Improvements Styles */
+.dashboard-counters {
+    margin-bottom: 2rem;
+}
+
+.dashboard-counters .stat-box {
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.dashboard-counters .stat-box:hover {
+    transform: translateY(-5px);
+    border-color: var(--accent-glow);
+    box-shadow: 0 8px 30px rgba(0, 242, 254, 0.2);
+}
+
+.dash-sub-stats {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    margin-top: 0.5rem;
+    font-family: var(--font-mono);
+}
+
+.quick-status-list .status-item {
+    font-family: var(--font-mono);
+}
+
+.compact-feed .alert-item {
+    padding: 0.6rem 0.8rem;
+    margin-bottom: 0.5rem;
+}
+
+.compact-feed .alert-title {
+    font-size: 0.85rem;
+}
+
+.compact-feed .alert-summary {
+    display: none; /* Hide summary in dashboard compact list */
+}
+
+/* Password cell toggle */
+.password-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-family: var(--font-mono);
+}
+
+.password-masked {
+    color: var(--color-muted);
+    letter-spacing: 2px;
+}
+
+.toggle-password-btn {
+    background: rgba(255, 255, 255, 0.05) !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    color: var(--text-secondary) !important;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.toggle-password-btn:hover {
+    background: rgba(255, 255, 255, 0.12) !important;
+    color: var(--text-primary) !important;
+}
+
+/* Custom styles for RSS list table */
+#feeds-table tbody tr td {
+    vertical-align: middle;
+}
+
 

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Index, text
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Index, text, Boolean
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from backend.database import Base
@@ -84,3 +84,13 @@ class Alert(Base):
     found_at = Column(DateTime(timezone=True), server_default=func.now())
 
     keyword = relationship("Keyword", back_populates="alerts")
+
+
+class Feed(Base):
+    __tablename__ = "feeds"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    url = Column(String, nullable=False, unique=True, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

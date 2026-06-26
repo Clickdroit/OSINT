@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     AI_BASE_URL: str = Field(default="https://inference.do-ai.run/v1")
     AI_MODEL_NAME: str = Field(default="router:osint")
 
+    # CORS Settings
+    CORS_ORIGINS: str = Field(default="*")
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

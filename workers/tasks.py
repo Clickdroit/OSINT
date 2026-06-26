@@ -3,11 +3,12 @@ import os
 import re
 import feedparser
 import httpx
+import hashlib
 from datetime import datetime
 from sqlalchemy import insert, select
 from backend.celery_app import celery_app
 from backend.database import SessionLocal
-from backend.models import Target, ScanResult, Leak, Keyword, Alert
+from backend.models import Target, ScanResult, Leak, Keyword, Alert, Feed
 from workers.site_signatures import SITES
 
 from backend.config import settings
@@ -243,15 +244,27 @@ def check_rss_feeds():
     alerts_created = 0
 
     try:
+        # Check if feeds table is empty, if so, seed it with defaults
+        feeds = db.scalars(select(Feed).where(Feed.is_active == True)).all()
+        if not feeds:
+            # Seed default feeds
+            for df in DEFAULT_FEEDS:
+                exists = db.scalar(select(Feed).where(Feed.url == df["url"]))
+                if not exists:
+                    feed_db = Feed(name=df["name"], url=df["url"], is_active=True)
+                    db.add(feed_db)
+            db.commit()
+            feeds = db.scalars(select(Feed).where(Feed.is_active == True)).all()
+
         # Fetch keywords to watch
         keywords = db.scalars(select(Keyword)).all()
         if not keywords:
             print("[RSS] No keywords configured. Skipping RSS check.")
             return {"status": "SKIPPED", "reason": "No keywords configured"}
 
-        for feed in DEFAULT_FEEDS:
-            print(f"[RSS] Fetching feed: {feed['name']} ({feed['url']})")
-            parsed_feed = feedparser.parse(feed["url"])
+        for feed in feeds:
+            print(f"[RSS] Fetching feed: {feed.name} ({feed.url})")
+            parsed_feed = feedparser.parse(feed.url)
             
             for entry in parsed_feed.entries:
                 title = entry.get("title", "")
@@ -273,7 +286,7 @@ def check_rss_feeds():
                             # Create new alert
                             alert = Alert(
                                 keyword_id=kw.id,
-                                source_feed=feed["name"],
+                                source_feed=feed.name,
                                 title=title,
                                 url=link,
                                 summary=summary[:1000] if summary else "", # truncate long summaries
@@ -488,15 +501,16 @@ def scan_domain(target_id: int):
             
         domain = target.value.lower().strip()
         
-        # 1. Query DNS records (MX, TXT)
+        # 1. Query DNS records (MX, TXT for SPF, and _dmarc.domain TXT for DMARC)
         dns_txt = query_dns_doh(domain, "TXT")
         dns_mx = query_dns_doh(domain, "MX")
+        dmarc_txt = query_dns_doh(f"_dmarc.{domain}", "TXT")
         
         # 2. Check HTTP headers & SSL
         headers_results = check_http_headers(domain)
         
         # 3. Generate AI security summary
-        report = generate_ai_domain_report(domain, dns_txt, dns_mx, headers_results)
+        report = generate_ai_domain_report(domain, dns_txt + dmarc_txt, dns_mx, headers_results)
         
         # 4. Save results to database
         db_results = []
@@ -541,15 +555,28 @@ def scan_domain(target_id: int):
             "details": "L'en-tête X-Frame-Options protège le site contre le détournement de clic (Clickjacking)." if headers_results["x_frame"] == "FOUND" else "L'en-tête X-Frame-Options est manquant, rendant l'application vulnérable au Clickjacking."
         })
         
-        # DNS Mail Security Result
-        dns_status = "FOUND" if (dns_txt and any("spf" in val.lower() or "dmarc" in val.lower() for val in dns_txt)) else "NOT_FOUND"
+        # SPF Result
+        spf_status = "FOUND" if (dns_txt and any("v=spf1" in val.lower() for val in dns_txt)) else "NOT_FOUND"
+        spf_record = next((val for val in dns_txt if "v=spf1" in val.lower()), None)
         db_results.append({
             "target_id": target_id,
-            "platform": "Configuration DNS Mail (SPF/DMARC)",
+            "platform": "Configuration DNS Mail (SPF)",
             "url": None,
-            "status": dns_status,
+            "status": spf_status,
             "response_code": None,
-            "details": f"Enregistrements SPF/DMARC trouvés : {', '.join(dns_txt)[:200]}" if dns_status == "FOUND" else "Aucun enregistrement SPF ou DMARC trouvé dans les champs TXT, facilitant l'usurpation d'identité par email (phishing/spoofing)."
+            "details": f"Enregistrement SPF trouvé : {spf_record[:200]}" if spf_status == "FOUND" else "Aucun enregistrement SPF trouvé dans les champs TXT, facilitant l'usurpation d'identité par email (email spoofing)."
+        })
+        
+        # DMARC Result
+        dmarc_status = "FOUND" if (dmarc_txt and any("v=dmarc1" in val.lower() for val in dmarc_txt)) else "NOT_FOUND"
+        dmarc_record = next((val for val in dmarc_txt if "v=dmarc1" in val.lower()), None)
+        db_results.append({
+            "target_id": target_id,
+            "platform": "Configuration DNS Mail (DMARC)",
+            "url": None,
+            "status": dmarc_status,
+            "response_code": None,
+            "details": f"Enregistrement DMARC trouvé : {dmarc_record[:200]}" if dmarc_status == "FOUND" else "Aucun enregistrement DMARC trouvé pour le sous-domaine _dmarc, augmentant les risques d'usurpation et réduisant la délivrabilité des emails."
         })
         
         # AI Security Report Result
@@ -564,12 +591,145 @@ def scan_domain(target_id: int):
         
         db.execute(insert(ScanResult), db_results)
         db.commit()
-        print(f"[Domain Scan] Completed for {domain}. Saved 6 audit entries.")
+        print(f"[Domain Scan] Completed for {domain}. Saved 7 audit entries.")
         return {"status": "SUCCESS", "target_id": target_id}
         
     except Exception as e:
         db.rollback()
         print(f"[Domain Scan] Database/Processing error: {str(e)}")
+        return {"status": "ERROR", "reason": str(e)}
+    finally:
+        db.close()
+
+
+def check_gravatar(email: str) -> dict:
+    email_clean = email.strip().lower()
+    email_hash = hashlib.md5(email_clean.encode('utf-8')).hexdigest()
+    url = f"https://www.gravatar.com/avatar/{email_hash}?d=404"
+    try:
+        response = httpx.get(url, timeout=5.0)
+        if response.status_code == 200:
+            return {
+                "status": "FOUND",
+                "details": f"Profil Gravatar existant détecté. Avatar URL: https://www.gravatar.com/avatar/{email_hash}"
+            }
+        elif response.status_code == 404:
+            return {
+                "status": "NOT_FOUND",
+                "details": "Aucun profil Gravatar public n'a été détecté pour cette adresse email."
+            }
+    except Exception as e:
+         return {
+             "status": "ERROR",
+             "details": f"Erreur de communication avec Gravatar : {str(e)}"
+         }
+    return {
+        "status": "NOT_FOUND",
+        "details": "Aucun profil Gravatar détecté."
+    }
+
+
+def check_email_domain_mx(email: str) -> dict:
+    if "@" not in email:
+        return {"status": "ERROR", "details": "Format d'adresse email invalide."}
+    domain = email.split("@")[-1]
+    mx_records = query_dns_doh(domain, "MX")
+    if mx_records:
+        return {
+            "status": "FOUND",
+            "details": f"Serveurs de messagerie configurés (MX) : {', '.join(mx_records)[:200]}"
+        }
+    else:
+        return {
+            "status": "NOT_FOUND",
+            "details": "Aucun serveur de messagerie (MX) trouvé pour ce domaine. L'adresse email est probablement inactive ou incapable de recevoir des messages."
+        }
+
+
+def search_local_leaks(email: str) -> dict:
+    db = SessionLocal()
+    try:
+        email_clean = email.strip()
+        query = select(Leak).where(Leak.email == email_clean).limit(10)
+        leaks = db.scalars(query).all()
+        if leaks:
+            sources = list(set([l.source for l in leaks if l.source]))
+            return {
+                "status": "FOUND",
+                "details": f"L'adresse email a été trouvée dans {len(leaks)} enregistrement(s) de fuites locales. Sources : {', '.join(sources)[:200]}."
+            }
+        else:
+            return {
+                "status": "NOT_FOUND",
+                "details": "Aucune correspondance trouvée pour cette adresse email dans les bases de fuites locales."
+            }
+    finally:
+        db.close()
+
+
+@celery_app.task(name="workers.tasks.scan_email")
+def scan_email(target_id: int):
+    print(f"[Email Scan] Starting scan for target ID: {target_id}")
+    db = SessionLocal()
+    try:
+        # Fetch target details
+        target = db.get(Target, target_id)
+        if not target or target.type != "email":
+            print(f"[Email Scan] Target ID {target_id} not found or is not an email.")
+            return {"status": "FAILED", "reason": "Target not found or invalid type"}
+            
+        email = target.value.lower().strip()
+        
+        # 1. Check Gravatar
+        gravatar_res = check_gravatar(email)
+        
+        # 2. Check MX records
+        mx_res = check_email_domain_mx(email)
+        
+        # 3. Check Local Leaks
+        leaks_res = search_local_leaks(email)
+        
+        # 4. Save results to database
+        db_results = []
+        
+        # Gravatar entry
+        db_results.append({
+            "target_id": target_id,
+            "platform": "Gravatar Profile check",
+            "url": f"https://en.gravatar.com/" if gravatar_res["status"] == "FOUND" else None,
+            "status": gravatar_res["status"],
+            "response_code": None,
+            "details": gravatar_res["details"]
+        })
+        
+        # MX configuration entry
+        db_results.append({
+            "target_id": target_id,
+            "platform": "Serveurs MX (Délivrabilité)",
+            "url": None,
+            "status": mx_res["status"],
+            "response_code": None,
+            "details": mx_res["details"]
+        })
+        
+        # Leaks entries
+        db_results.append({
+            "target_id": target_id,
+            "platform": "Bases de fuites locales",
+            "url": None,
+            "status": leaks_res["status"],
+            "response_code": None,
+            "details": leaks_res["details"]
+        })
+        
+        db.execute(insert(ScanResult), db_results)
+        db.commit()
+        print(f"[Email Scan] Completed for {email}. Saved 3 audit entries.")
+        return {"status": "SUCCESS", "target_id": target_id}
+        
+    except Exception as e:
+        db.rollback()
+        print(f"[Email Scan] Database/Processing error: {str(e)}")
         return {"status": "ERROR", "reason": str(e)}
     finally:
         db.close()
