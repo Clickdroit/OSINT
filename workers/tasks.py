@@ -2,6 +2,7 @@ import asyncio
 import os
 import re
 import json
+import redis
 import feedparser
 import httpx
 import hashlib
@@ -18,6 +19,9 @@ import google.generativeai as genai
 # Configure Google Gemini
 if settings.GEMINI_API_KEY:
     genai.configure(api_key=settings.GEMINI_API_KEY)
+
+# Initialize Redis client for caching
+redis_client = redis.Redis.from_url(settings.celery_broker)
 
 # Headers to mimic a standard browser request
 DEFAULT_HEADERS = {
@@ -176,7 +180,7 @@ def generate_ai_username_report(username: str, results: list) -> str:
         for cat, platforms in sorted(categories.items())
     ) or "Aucune plateforme détectée."
 
-    # Build a details string of metadata retrieved
+    # Build a details string of metadata retrieved (truncated to optimize prompt size)
     found_profiles_info = []
     for r in found:
         meta = r.get("metadata", {})
@@ -184,15 +188,20 @@ def generate_ai_username_report(username: str, results: list) -> str:
         meta_parts = []
         if meta:
             if meta.get("name"):
-                meta_parts.append(f"Nom: {meta['name']}")
+                val = meta["name"]
+                meta_parts.append(f"Nom: {val[:50] + '...' if len(val) > 50 else val}")
             if meta.get("location"):
-                meta_parts.append(f"Localisation: {meta['location']}")
+                val = meta["location"]
+                meta_parts.append(f"Localisation: {val[:50] + '...' if len(val) > 50 else val}")
             if meta.get("bio"):
-                meta_parts.append(f"Bio: {meta['bio']}")
+                val = meta["bio"]
+                meta_parts.append(f"Bio: {val[:120] + '...' if len(val) > 120 else val}")
             elif meta.get("description"):
-                meta_parts.append(f"Description: {meta['description']}")
+                val = meta["description"]
+                meta_parts.append(f"Description: {val[:120] + '...' if len(val) > 120 else val}")
             if meta.get("company"):
-                meta_parts.append(f"Entreprise: {meta['company']}")
+                val = meta["company"]
+                meta_parts.append(f"Entreprise: {val[:50] + '...' if len(val) > 50 else val}")
             if meta.get("total_karma"):
                 meta_parts.append(f"Karma: {meta['total_karma']}")
             if meta.get("created_at"):
@@ -209,6 +218,16 @@ def generate_ai_username_report(username: str, results: list) -> str:
         "🟡 **FAIBLE**" if len(found) > 3 else
         "🟢 **TRÈS FAIBLE**"
     )
+
+    # Check cache first to avoid expensive and slow AI calls
+    cache_key = f"ai_username_report:{username}:{len(found)}"
+    try:
+        cached_report = redis_client.get(cache_key)
+        if cached_report:
+            print(f"[Scan] Reusing cached AI report for {username}")
+            return cached_report.decode("utf-8")
+    except Exception as cache_err:
+        print(f"[Redis Cache Error] {cache_err}")
 
     system_instruction = (
         "Tu es 'Cyber Copilot OSINT Analyst', un expert en intelligence en sources ouvertes (OSINT) "
@@ -252,10 +271,15 @@ def generate_ai_username_report(username: str, results: list) -> str:
             response = httpx.post(
                 url,
                 headers={"Content-Type": "application/json", "Authorization": f"Bearer {settings.AI_API_KEY}"},
-                json={"model": settings.AI_MODEL_NAME, "messages": [
-                    {"role": "system", "content": system_instruction},
-                    {"role": "user", "content": prompt}
-                ]},
+                json={
+                    "model": settings.AI_MODEL_NAME, 
+                    "messages": [
+                        {"role": "system", "content": system_instruction},
+                        {"role": "user", "content": prompt}
+                    ],
+                    "temperature": 0.2,
+                    "max_tokens": 1500
+                },
                 timeout=25.0
             )
             if response.status_code != 200:
@@ -269,7 +293,12 @@ def generate_ai_username_report(username: str, results: list) -> str:
             return None, "Gemini API key not configured."
         try:
             model = genai.GenerativeModel(model_name="gemini-1.5-flash", system_instruction=system_instruction)
-            return model.generate_content(prompt, request_options={"timeout": 25.0}).text, None
+            response = model.generate_content(
+                prompt,
+                generation_config={"temperature": 0.2, "max_output_tokens": 1500},
+                request_options={"timeout": 25.0}
+            )
+            return response.text, None
         except Exception as e:
             return None, str(e)
 
@@ -301,6 +330,14 @@ def generate_ai_username_report(username: str, results: list) -> str:
             f"**Profils détectés ({len(found)}/{len(results)})** :\n{platforms_by_cat}\n\n"
             f"*(L'analyse IA détaillée n'est pas disponible. Vérifiez la configuration GEMINI_API_KEY ou AI_API_KEY.)*"
         )
+    else:
+        # Cache successful report in Redis
+        if "SCORE DE CONFIANCE IA : 0%" not in response_text:
+            try:
+                redis_client.setex(cache_key, 7200, response_text) # Cache for 2 hours
+            except Exception as cache_err:
+                print(f"[Redis Cache Save Error] {cache_err}")
+                
     return response_text
 
 
